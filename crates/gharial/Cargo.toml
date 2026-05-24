@@ -1,0 +1,23 @@
+[package]
+name = "gharial"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Minimal master-stack layout daemon for the river Wayland compositor."
+
+[[bin]]
+name = "gharial"
+path = "src/main.rs"
+
+[dependencies]
+gharial-ipc.workspace = true
+wayland-client = "0.31"
+wayland-backend = "0.3"
+wayland-scanner = "0.31"
+calloop = "0.14"
+calloop-wayland-source = "0.4"
+# Required by wayland-scanner-generated code for bitfield enums.
+bitflags = "2"
+# Spawned-child reaping (SIGCHLD = SIG_IGN), nothing else.
+libc = "0.2"

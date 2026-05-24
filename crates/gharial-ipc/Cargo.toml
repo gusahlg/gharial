@@ -1,0 +1,9 @@
+[package]
+name = "gharial-ipc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared IPC protocol types for the gharial daemon and gharialctl."
+
+[dependencies]

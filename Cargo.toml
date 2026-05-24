@@ -1,6 +1,25 @@
-[package]
-name = "gharial"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "crates/gharial",
+    "crates/gharialctl",
+    "crates/gharial-ipc",
+]
 
-[dependencies]
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+authors = ["gusahlg"]
+repository = "https://github.com/gusahlg/gharial"
+rust-version = "1.75"
+
+[workspace.dependencies]
+gharial-ipc = { path = "crates/gharial-ipc" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+opt-level = 3

@@ -1,0 +1,14 @@
+[package]
+name = "gharialctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Control tool for the gharial layout daemon."
+
+[[bin]]
+name = "gharialctl"
+path = "src/main.rs"
+
+[dependencies]
+gharial-ipc.workspace = true
