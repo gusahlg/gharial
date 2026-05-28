@@ -1,8 +1,8 @@
 //! Pure command-grammar logic: take a `Params` plus a parsed command,
 //! mutate `Params`, or return a structured error message.
 //!
-//! No locks, no I/O. Tests for the grammar live alongside `Shared` in
-//! [`super::tests`] because they exercise the locked entry point.
+//! No locks, no I/O. Tests for the grammar live alongside `Shared`
+//! because they exercise the locked entry point.
 
 use crate::layout::{Orientation, Params};
 
@@ -16,7 +16,8 @@ pub(super) fn apply_command(p: &mut Params, cmd: &str, args: &[&str]) -> Result<
         "outer-padding" => apply_u32(&mut p.outer_padding, require_one(cmd, args)?),
         "orientation" => {
             let v = require_one(cmd, args)?;
-            p.orientation = v.parse::<Orientation>()
+            p.orientation = v
+                .parse::<Orientation>()
                 .map_err(|_| format!("invalid orientation: {v} (left|right|top|bottom)"))?;
             Ok(())
         }
@@ -59,8 +60,13 @@ pub(super) fn apply_border_command(
 pub(super) fn summarize_border(b: &BorderConfig, cmd: &str) -> String {
     match cmd {
         "border-width" => format!("border-width={}", b.width),
-        "border-color-focused" => format!("border-color-focused={}", super::format_color(&b.focused)),
-        "border-color-unfocused" => format!("border-color-unfocused={}", super::format_color(&b.unfocused)),
+        "border-color-focused" => {
+            format!("border-color-focused={}", super::format_color(&b.focused))
+        }
+        "border-color-unfocused" => format!(
+            "border-color-unfocused={}",
+            super::format_color(&b.unfocused)
+        ),
         _ => String::new(),
     }
 }
@@ -75,7 +81,9 @@ fn parse_color(raw: &str) -> Result<super::BorderColor, String> {
         .or_else(|| raw.strip_prefix('#'))
         .unwrap_or(raw);
     if hex.len() != 8 {
-        return Err(format!("invalid color {raw}: expected 8 hex digits (RRGGBBAA)"));
+        return Err(format!(
+            "invalid color {raw}: expected 8 hex digits (RRGGBBAA)"
+        ));
     }
     let parse = |i: usize| -> Result<u8, String> {
         u8::from_str_radix(&hex[i..i + 2], 16)
@@ -123,7 +131,9 @@ fn apply_float(field: &mut f32, raw: &str) -> Result<(), String> {
 
 fn apply_u32(field: &mut u32, raw: &str) -> Result<(), String> {
     let (op, rest) = parse_op(raw);
-    let v: u32 = rest.parse().map_err(|_| format!("invalid integer: {raw}"))?;
+    let v: u32 = rest
+        .parse()
+        .map_err(|_| format!("invalid integer: {raw}"))?;
     match op {
         Op::Set => *field = v,
         Op::Add => *field = field.saturating_add(v),

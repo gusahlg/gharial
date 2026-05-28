@@ -2,10 +2,10 @@
 //! belongs to.
 //!
 //! Grammar:
-//!   tag focus <N>             show only tag N (1..32)
-//!   tag toggle <N>            add/remove tag N from the active set
-//!   tag move <N>              send focused window to tag N
-//!   tag window-toggle <N>     add/remove tag N from focused window
+//!   `tag focus <N>`             show only tag N (1..32)
+//!   `tag toggle <N>`            add/remove tag N from the active set
+//!   `tag move <N>`              send focused window to tag N
+//!   `tag window-toggle <N>`     add/remove tag N from focused window
 
 use gharial_ipc::Response;
 

@@ -23,7 +23,10 @@ pub struct Sequence {
 
 impl Sequence {
     pub fn new() -> Self {
-        Self { phase: Phase::Idle, generation: 0 }
+        Self {
+            phase: Phase::Idle,
+            generation: 0,
+        }
     }
 
     /// Exposed for tests only — production code never needs to peek at
@@ -35,7 +38,9 @@ impl Sequence {
 
     pub fn enter_manage(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        self.phase = Phase::Managing { generation: self.generation };
+        self.phase = Phase::Managing {
+            generation: self.generation,
+        };
     }
 
     pub fn exit_manage(&mut self) {
@@ -45,7 +50,9 @@ impl Sequence {
     pub fn enter_render(&mut self) {
         // Render keeps the same generation as the manage that preceded
         // it; meaningful once per-generation reconciliation lands.
-        self.phase = Phase::Rendering { generation: self.generation };
+        self.phase = Phase::Rendering {
+            generation: self.generation,
+        };
     }
 
     pub fn exit_render(&mut self) {

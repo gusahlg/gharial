@@ -40,11 +40,7 @@ impl Server {
     }
 
     /// Bind the socket at an explicit path. Used for tests.
-    pub fn start_at(
-        path: PathBuf,
-        shared: Shared,
-        notifier: Option<Notifier>,
-    ) -> io::Result<Self> {
+    pub fn start_at(path: PathBuf, shared: Shared, notifier: Option<Notifier>) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
@@ -69,7 +65,10 @@ impl Server {
             .spawn(move || run(listener, shared, notifier))
             .expect("spawn ipc thread");
 
-        Ok(Self { socket_path, _handle: handle })
+        Ok(Self {
+            socket_path,
+            _handle: handle,
+        })
     }
 }
 

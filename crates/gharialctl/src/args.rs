@@ -75,7 +75,10 @@ mod tests {
     #[test]
     fn timeout_defaults_to_milliseconds() {
         assert_eq!(parse_timeout(Some("250")), Some(Duration::from_millis(250)));
-        assert_eq!(parse_timeout(Some("250ms")), Some(Duration::from_millis(250)));
+        assert_eq!(
+            parse_timeout(Some("250ms")),
+            Some(Duration::from_millis(250))
+        );
         assert_eq!(parse_timeout(Some("3s")), Some(Duration::from_secs(3)));
         assert_eq!(parse_timeout(Some("3min")), None);
         assert_eq!(parse_timeout(None), None);

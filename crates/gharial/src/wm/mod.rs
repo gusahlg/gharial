@@ -34,6 +34,7 @@ fn start_child_reaper() {
 mod actions;
 mod bindings;
 mod dispatch;
+mod focus;
 mod globals;
 mod modes;
 mod outputs;
@@ -78,6 +79,7 @@ pub fn run(shared: Shared) -> Result<(), Box<dyn Error>> {
     let (ping, ping_source) = calloop::ping::make_ping()?;
     loop_handle.insert_source(ping_source, |_, _, world: &mut World| {
         if world.shared.take_dirty() {
+            world.mark_layout_dirty();
             world.globals.manager.manage_dirty();
         }
     })?;

@@ -44,8 +44,14 @@ fn dispatch(req: Request, shared: &Shared) -> (Response, bool) {
     let args: Vec<&str> = req.args.iter().map(String::as_str).collect();
     match req.command.as_str() {
         // Layout params — also accepted from river user_command paths.
-        "main-ratio" | "main-count" | "gaps" | "outer-padding" | "orientation"
-        | "smart-gaps" | "border-width" | "border-color-focused"
+        "main-ratio"
+        | "main-count"
+        | "gaps"
+        | "outer-padding"
+        | "orientation"
+        | "smart-gaps"
+        | "border-width"
+        | "border-color-focused"
         | "border-color-unfocused" => layout::apply(shared, &req.command, &args),
         "set" => layout::set(shared, &args),
         "get" => layout::get(shared, &args),

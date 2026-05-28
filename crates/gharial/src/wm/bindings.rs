@@ -76,10 +76,11 @@ pub fn install_binding(
         .primary()
         .ok_or("no seat available — wait for compositor to advertise one")?;
     let modifiers = Modifiers::from_bits_truncate(spec.modifiers);
-    let proxy = world
-        .globals
-        .xkb
-        .get_xkb_binding(&seat.proxy, spec.keysym, modifiers, &world.qh, ());
+    let proxy =
+        world
+            .globals
+            .xkb
+            .get_xkb_binding(&seat.proxy, spec.keysym, modifiers, &world.qh, ());
     let mut entry = BindingEntry {
         spec,
         action,

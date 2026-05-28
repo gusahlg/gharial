@@ -10,9 +10,7 @@ mod window;
 mod xkb_binding;
 
 use wayland_client::{
-    delegate_noop,
-    globals::GlobalListContents,
-    protocol::wl_registry::WlRegistry,
+    delegate_noop, globals::GlobalListContents, protocol::wl_registry::WlRegistry,
 };
 
 use crate::wayland_proto::{

@@ -2,7 +2,10 @@
 //! short and the help block can grow without crowding the control flow.
 
 pub fn usage(long: bool) {
-    println!("gharialctl {} - control the gharial window manager", env!("CARGO_PKG_VERSION"));
+    println!(
+        "gharialctl {} - control the gharial window manager",
+        env!("CARGO_PKG_VERSION")
+    );
     println!();
     println!("Usage: gharialctl [-s SOCKET] <command> [args...]");
     if !long {

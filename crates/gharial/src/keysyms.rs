@@ -19,11 +19,40 @@ pub fn parse_keysym(s: &str) -> Option<u32> {
         }
         // A handful of printable ASCII punctuation that users frequently
         // bind. xkbcommon's keysyms for these match their ASCII values.
-        if matches!(c,
-            ' ' | '!' | '"' | '#' | '$' | '%' | '&' | '\'' | '(' | ')'
-            | '*' | '+' | ',' | '-' | '.' | '/' | ':' | ';' | '<' | '='
-            | '>' | '?' | '@' | '[' | '\\' | ']' | '^' | '_' | '`'
-            | '{' | '|' | '}' | '~'
+        if matches!(
+            c,
+            ' ' | '!'
+                | '"'
+                | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '('
+                | ')'
+                | '*'
+                | '+'
+                | ','
+                | '-'
+                | '.'
+                | '/'
+                | ':'
+                | ';'
+                | '<'
+                | '='
+                | '>'
+                | '?'
+                | '@'
+                | '['
+                | '\\'
+                | ']'
+                | '^'
+                | '_'
+                | '`'
+                | '{'
+                | '|'
+                | '}'
+                | '~'
         ) {
             return Some(c as u32);
         }
@@ -69,17 +98,43 @@ const NAMED: &[(&str, u32)] = &[
     ("right", 0xff53),
     ("down", 0xff54),
     // F keys
-    ("f1", 0xffbe), ("f2", 0xffbf), ("f3", 0xffc0), ("f4", 0xffc1),
-    ("f5", 0xffc2), ("f6", 0xffc3), ("f7", 0xffc4), ("f8", 0xffc5),
-    ("f9", 0xffc6), ("f10", 0xffc7), ("f11", 0xffc8), ("f12", 0xffc9),
-    ("f13", 0xffca), ("f14", 0xffcb), ("f15", 0xffcc), ("f16", 0xffcd),
-    ("f17", 0xffce), ("f18", 0xffcf), ("f19", 0xffd0), ("f20", 0xffd1),
+    ("f1", 0xffbe),
+    ("f2", 0xffbf),
+    ("f3", 0xffc0),
+    ("f4", 0xffc1),
+    ("f5", 0xffc2),
+    ("f6", 0xffc3),
+    ("f7", 0xffc4),
+    ("f8", 0xffc5),
+    ("f9", 0xffc6),
+    ("f10", 0xffc7),
+    ("f11", 0xffc8),
+    ("f12", 0xffc9),
+    ("f13", 0xffca),
+    ("f14", 0xffcb),
+    ("f15", 0xffcc),
+    ("f16", 0xffcd),
+    ("f17", 0xffce),
+    ("f18", 0xffcf),
+    ("f19", 0xffd0),
+    ("f20", 0xffd1),
     // Numpad
-    ("kp_0", 0xffb0), ("kp_1", 0xffb1), ("kp_2", 0xffb2), ("kp_3", 0xffb3),
-    ("kp_4", 0xffb4), ("kp_5", 0xffb5), ("kp_6", 0xffb6), ("kp_7", 0xffb7),
-    ("kp_8", 0xffb8), ("kp_9", 0xffb9),
-    ("kp_add", 0xffab), ("kp_subtract", 0xffad), ("kp_multiply", 0xffaa),
-    ("kp_divide", 0xffaf), ("kp_enter", 0xff8d), ("kp_decimal", 0xffae),
+    ("kp_0", 0xffb0),
+    ("kp_1", 0xffb1),
+    ("kp_2", 0xffb2),
+    ("kp_3", 0xffb3),
+    ("kp_4", 0xffb4),
+    ("kp_5", 0xffb5),
+    ("kp_6", 0xffb6),
+    ("kp_7", 0xffb7),
+    ("kp_8", 0xffb8),
+    ("kp_9", 0xffb9),
+    ("kp_add", 0xffab),
+    ("kp_subtract", 0xffad),
+    ("kp_multiply", 0xffaa),
+    ("kp_divide", 0xffaf),
+    ("kp_enter", 0xff8d),
+    ("kp_decimal", 0xffae),
     // XF86 media + brightness — handy for laptop config scripts.
     ("xf86audioraisevolume", 0x1008ff13),
     ("xf86audiolowervolume", 0x1008ff11),

@@ -122,11 +122,19 @@ impl Shared {
     }
 
     pub fn snapshot(&self) -> Params {
-        self.inner.lock().expect("params mutex poisoned").params.clone()
+        self.inner
+            .lock()
+            .expect("params mutex poisoned")
+            .params
+            .clone()
     }
 
     pub fn borders(&self) -> BorderConfig {
-        self.inner.lock().expect("params mutex poisoned").borders.clone()
+        self.inner
+            .lock()
+            .expect("params mutex poisoned")
+            .borders
+            .clone()
     }
 
     /// Apply a layout or border command. Sets the dirty flag on any
@@ -211,9 +219,7 @@ fn format_color(c: &BorderColor) -> String {
     // Inverse of `(byte * 0x0101_0101)` with rounding. Saturating add
     // because the additive rounding offset would overflow on inputs
     // near `u32::MAX`.
-    let to_byte = |v: u32| {
-        (v.saturating_add(0x0080_0080) / 0x0101_0101).min(0xff) as u8
-    };
+    let to_byte = |v: u32| (v.saturating_add(0x0080_0080) / 0x0101_0101).min(0xff) as u8;
     let a_byte = to_byte(c[3]);
     let demul = |v: u32| -> u8 {
         if a_byte == 0 {
@@ -225,6 +231,9 @@ fn format_color(c: &BorderColor) -> String {
     };
     format!(
         "0x{:02X}{:02X}{:02X}{:02X}",
-        demul(c[0]), demul(c[1]), demul(c[2]), a_byte
+        demul(c[0]),
+        demul(c[1]),
+        demul(c[2]),
+        a_byte
     )
 }

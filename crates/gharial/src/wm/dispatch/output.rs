@@ -20,6 +20,7 @@ impl Dispatch<RiverOutputV1, ()> for World {
         match event {
             iface::Event::Removed => {
                 if let Some(entry) = state.outputs.remove(&id) {
+                    state.mark_layout_dirty();
                     entry.proxy.destroy();
                 }
             }
@@ -30,12 +31,20 @@ impl Dispatch<RiverOutputV1, ()> for World {
             }
             iface::Event::Position { x, y } => {
                 if let Some(entry) = state.outputs.get_mut(&id) {
+                    let changed = entry.position != (x, y);
                     entry.position = (x, y);
+                    if changed {
+                        state.mark_layout_dirty();
+                    }
                 }
             }
             iface::Event::Dimensions { width, height } => {
                 if let Some(entry) = state.outputs.get_mut(&id) {
+                    let changed = entry.dimensions != (width, height);
                     entry.dimensions = (width, height);
+                    if changed {
+                        state.mark_layout_dirty();
+                    }
                 }
             }
         }

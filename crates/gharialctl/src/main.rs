@@ -55,8 +55,8 @@ fn main() -> ExitCode {
     let path = socket_override.unwrap_or_else(gharial_ipc::socket_path);
 
     if command == "wait" {
-        let timeout = parse_timeout(cmd_args.first().map(String::as_str))
-            .unwrap_or(Duration::from_secs(2));
+        let timeout =
+            parse_timeout(cmd_args.first().map(String::as_str)).unwrap_or(Duration::from_secs(2));
         return wait_for_daemon(&path, timeout);
     }
 

@@ -1,8 +1,8 @@
 //! `mode` IPC verb — switches the active binding mode.
 //!
 //! Grammar:
-//!   mode <name>      enter the named mode
-//!   mode exit        return to "default"
+//!   `mode <name>`      enter the named mode
+//!   `mode exit`        return to "default"
 
 use gharial_ipc::Response;
 

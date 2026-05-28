@@ -28,26 +28,65 @@ fn all_edges() -> Edges {
     Edges::Top | Edges::Bottom | Edges::Left | Edges::Right
 }
 
+#[derive(Debug)]
+pub struct TargetCache {
+    targets: HashMap<ObjectId, Rect>,
+    dirty: bool,
+    recompute_count: u64,
+}
+
+impl Default for TargetCache {
+    fn default() -> Self {
+        Self {
+            targets: HashMap::new(),
+            dirty: true,
+            recompute_count: 0,
+        }
+    }
+}
+
+impl TargetCache {
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    fn snapshot(&self) -> Option<HashMap<ObjectId, Rect>> {
+        (!self.dirty).then(|| self.targets.clone())
+    }
+
+    fn replace(&mut self, targets: HashMap<ObjectId, Rect>) {
+        self.targets = targets;
+        self.dirty = false;
+        self.recompute_count = self.recompute_count.wrapping_add(1);
+    }
+
+    #[cfg(test)]
+    fn recompute_count(&self) -> u64 {
+        self.recompute_count
+    }
+}
+
+pub fn targets(world: &mut World) -> HashMap<ObjectId, Rect> {
+    if let Some(targets) = world.target_cache.snapshot() {
+        return targets;
+    }
+    let targets = compute_targets(world);
+    world.target_cache.replace(targets.clone());
+    targets
+}
+
 /// Compute target slot rectangles (outer, including border) for each
 /// visible tiled window. Hidden (off-tag) and floating windows are
 /// excluded.
 pub fn compute_targets(world: &World) -> HashMap<ObjectId, Rect> {
-    let Some(output) = world.outputs.primary() else { return HashMap::new() };
+    let Some(output) = world.outputs.primary() else {
+        return HashMap::new();
+    };
     if !output.has_dimensions() {
         return HashMap::new();
     }
 
-    let tiled: Vec<ObjectId> = world
-        .windows
-        .ordered_ids()
-        .into_iter()
-        .filter(|id| {
-            world
-                .windows
-                .get(id)
-                .is_some_and(|w| w.visible && !w.floating)
-        })
-        .collect();
+    let tiled = world.windows.visible_tiled_ids();
     if tiled.is_empty() {
         return HashMap::new();
     }
@@ -97,7 +136,9 @@ pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
     let border_width = world.shared.borders().width;
 
     for id in world.windows.ordered_ids() {
-        let Some(entry) = world.windows.get_mut(&id) else { continue };
+        let Some(entry) = world.windows.get_mut(&id) else {
+            continue;
+        };
 
         // One-shot: ask every window to use server-side decorations so
         // they stop drawing their own titlebars/borders.
@@ -111,7 +152,11 @@ pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
         // restore them.
         let want_tiled = !entry.floating;
         if entry.tiled_edges_sent != Some(want_tiled) {
-            let edges = if want_tiled { all_edges() } else { Edges::empty() };
+            let edges = if want_tiled {
+                all_edges()
+            } else {
+                Edges::empty()
+            };
             entry.proxy.set_tiled(edges);
             entry.tiled_edges_sent = Some(want_tiled);
         }
@@ -120,8 +165,12 @@ pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
         if !entry.visible || entry.floating {
             continue;
         }
-        let Some(slot) = targets.get(&id) else { continue };
-        let Some(content) = inset(*slot, border_width) else { continue };
+        let Some(slot) = targets.get(&id) else {
+            continue;
+        };
+        let Some(content) = inset(*slot, border_width) else {
+            continue;
+        };
         let want = (content.w as i32, content.h as i32);
         if entry.proposed != Some(want) {
             entry.proxy.propose_dimensions(want.0, want.1);
@@ -139,10 +188,16 @@ pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
 pub fn flush_render(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
     let focused = world.seats.primary().and_then(|s| s.focused.clone());
     let borders = world.shared.borders();
-    let border_edges = if borders.width == 0 { Edges::empty() } else { all_edges() };
+    let border_edges = if borders.width == 0 {
+        Edges::empty()
+    } else {
+        all_edges()
+    };
 
     for id in world.windows.ordered_ids() {
-        let Some(entry) = world.windows.get_mut(&id) else { continue };
+        let Some(entry) = world.windows.get_mut(&id) else {
+            continue;
+        };
 
         if entry.visible && entry.hidden_on_server {
             entry.proxy.show();
@@ -159,7 +214,11 @@ pub fn flush_render(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
         let is_focused = focused.as_ref() == Some(&id);
         let signature = (borders.width, is_focused);
         if entry.borders_signature != Some(signature) {
-            let color = if is_focused { &borders.focused } else { &borders.unfocused };
+            let color = if is_focused {
+                &borders.focused
+            } else {
+                &borders.unfocused
+            };
             entry.proxy.set_borders(
                 border_edges,
                 borders.width as i32,
@@ -184,5 +243,33 @@ pub fn flush_render(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
                 entry.position = Some(pos);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_cache_starts_dirty_and_reuses_clean_snapshot() {
+        let mut cache = TargetCache::default();
+        assert_eq!(cache.snapshot(), None);
+
+        let targets = HashMap::new();
+        cache.replace(targets);
+        assert_eq!(cache.recompute_count(), 1);
+        assert_eq!(cache.snapshot(), Some(HashMap::new()));
+        assert_eq!(cache.recompute_count(), 1);
+    }
+
+    #[test]
+    fn marking_target_cache_dirty_forces_next_replace_to_count() {
+        let mut cache = TargetCache::default();
+        cache.replace(HashMap::new());
+        cache.mark_dirty();
+        assert_eq!(cache.snapshot(), None);
+        cache.replace(HashMap::new());
+
+        assert_eq!(cache.recompute_count(), 2);
     }
 }

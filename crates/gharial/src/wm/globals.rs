@@ -62,5 +62,9 @@ pub fn bind_all(globals: &GlobalList, qh: &QueueHandle<World>) -> Result<Globals
     let layer_shell: RiverLayerShellV1 = globals
         .bind(qh, LAYER_SHELL_VERSION, ())
         .map_err(GlobalError::LayerShell)?;
-    Ok(Globals { manager, xkb, layer_shell })
+    Ok(Globals {
+        manager,
+        xkb,
+        layer_shell,
+    })
 }

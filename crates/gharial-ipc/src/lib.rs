@@ -53,7 +53,10 @@ pub struct Request {
 
 impl Request {
     pub fn new(command: impl Into<String>, args: Vec<String>) -> Self {
-        Self { command: command.into(), args }
+        Self {
+            command: command.into(),
+            args,
+        }
     }
 
     /// Encode the request to a single line including the trailing `\n`.
@@ -75,7 +78,10 @@ impl Request {
             return Err(ParseError::Empty);
         }
         let command = tokens.remove(0);
-        Ok(Self { command, args: tokens })
+        Ok(Self {
+            command,
+            args: tokens,
+        })
     }
 }
 
@@ -86,10 +92,16 @@ pub enum Response {
 }
 
 impl Response {
-    pub fn ok(body: impl Into<String>) -> Self { Self::Ok(body.into()) }
-    pub fn err(body: impl Into<String>) -> Self { Self::Err(body.into()) }
+    pub fn ok(body: impl Into<String>) -> Self {
+        Self::Ok(body.into())
+    }
+    pub fn err(body: impl Into<String>) -> Self {
+        Self::Err(body.into())
+    }
 
-    pub fn is_ok(&self) -> bool { matches!(self, Self::Ok(_)) }
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Self::Ok(_))
+    }
 
     pub fn body(&self) -> &str {
         match self {
@@ -146,7 +158,10 @@ fn unescape_body(s: &str) -> String {
                 Some('n') => out.push('\n'),
                 Some('r') => out.push('\r'),
                 Some('\\') => out.push('\\'),
-                Some(other) => { out.push('\\'); out.push(other); }
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
                 None => out.push('\\'),
             }
         } else {
@@ -218,7 +233,10 @@ fn tokenize(line: &str) -> Result<Vec<String>, ParseError> {
                         Some('\\') => cur.push('\\'),
                         Some('n') => cur.push('\n'),
                         Some('t') => cur.push('\t'),
-                        Some(other) => { cur.push('\\'); cur.push(other); }
+                        Some(other) => {
+                            cur.push('\\');
+                            cur.push(other);
+                        }
                         None => return Err(ParseError::UnterminatedQuote),
                     },
                     Some(c) => cur.push(c),
@@ -226,7 +244,9 @@ fn tokenize(line: &str) -> Result<Vec<String>, ParseError> {
             }
         } else {
             while let Some(&c) = chars.peek() {
-                if c.is_whitespace() { break; }
+                if c.is_whitespace() {
+                    break;
+                }
                 cur.push(c);
                 chars.next();
             }
@@ -249,8 +269,7 @@ pub fn send_one(path: &std::path::Path, req: &Request) -> io::Result<Response> {
     if n == 0 {
         return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "no response"));
     }
-    Response::parse(&line)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+    Response::parse(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
 #[cfg(test)]

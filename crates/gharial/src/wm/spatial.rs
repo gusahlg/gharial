@@ -22,7 +22,10 @@ pub fn pick_neighbor<Id: Eq + Clone>(
     focused: Rect,
     dir: Direction,
 ) -> Option<Id> {
-    debug_assert!(dir.is_spatial(), "pick_neighbor only handles cardinal directions");
+    debug_assert!(
+        dir.is_spatial(),
+        "pick_neighbor only handles cardinal directions"
+    );
 
     let fc = center(focused);
     let mut best: Option<(i64, i64, Id)> = None;
@@ -48,7 +51,9 @@ pub fn pick_neighbor<Id: Eq + Clone>(
 
         // perpendicular distance dominates (alignment), then axial distance.
         let (perp, axial) = match dir {
-            Direction::Left | Direction::Right => (dy.unsigned_abs() as i64, dx.unsigned_abs() as i64),
+            Direction::Left | Direction::Right => {
+                (dy.unsigned_abs() as i64, dx.unsigned_abs() as i64)
+            }
             Direction::Up | Direction::Down => (dx.unsigned_abs() as i64, dy.unsigned_abs() as i64),
             _ => unreachable!(),
         };
@@ -120,8 +125,8 @@ mod tests {
         // Y is far right but perfectly aligned. "Right" picks Y.
         let rects = vec![
             ("F", r(0, 0, 100, 100)),
-            ("X", r(50, 800, 100, 100)),   // off-axis but close-ish in x
-            ("Y", r(500, 0, 100, 100)),    // far in x, aligned in y
+            ("X", r(50, 800, 100, 100)), // off-axis but close-ish in x
+            ("Y", r(500, 0, 100, 100)),  // far in x, aligned in y
         ];
         let next = pick_neighbor(&rects, &"F", r(0, 0, 100, 100), Direction::Right);
         assert_eq!(next, Some("Y"));
@@ -133,7 +138,7 @@ mod tests {
         let rects = vec![
             ("F", r(0, 0, 100, 100)),
             ("Near", r(150, 0, 100, 100)),
-            ("Far",  r(500, 0, 100, 100)),
+            ("Far", r(500, 0, 100, 100)),
         ];
         let next = pick_neighbor(&rects, &"F", r(0, 0, 100, 100), Direction::Right);
         assert_eq!(next, Some("Near"));
@@ -144,7 +149,7 @@ mod tests {
     #[test]
     fn master_stack_right_picks_top_of_stack() {
         let rects = vec![
-            ("main",  r(0, 0, 1000, 1080)),
+            ("main", r(0, 0, 1000, 1080)),
             ("stack1", r(1000, 0, 920, 540)),
             ("stack2", r(1000, 540, 920, 540)),
         ];

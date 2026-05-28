@@ -9,7 +9,10 @@ use crate::keysyms::{parse_keysym, parse_modifier};
 #[derive(Clone, Debug)]
 pub enum Action {
     /// Fork+exec a command, detached.
-    Spawn { cmd: String, args: Vec<String> },
+    Spawn {
+        cmd: String,
+        args: Vec<String>,
+    },
     /// Close the focused window (server-side close request).
     Close,
     /// Shift keyboard focus along the stack order.
@@ -20,7 +23,10 @@ pub enum Action {
     /// windows keep their own size and are skipped by the tiling layout.
     ToggleFloat,
     /// Adjust a layout parameter (mirrors the gharialctl `set` grammar).
-    Layout { key: String, args: Vec<String> },
+    Layout {
+        key: String,
+        args: Vec<String>,
+    },
     /// Switch the active binding mode.
     EnterMode(String),
     /// Return to the default binding mode.
@@ -33,7 +39,10 @@ pub enum Action {
         mode: String,
     },
     /// Remove a binding by (mode, chord).
-    Unbind { spec: BindingSpec, mode: String },
+    Unbind {
+        spec: BindingSpec,
+        mode: String,
+    },
 
     // Tags
     FocusTag(u8),
@@ -139,29 +148,36 @@ impl Action {
             "tag" => parse_tag_action(rest),
             // Anything else is treated as a layout-param command — the
             // same set of keys `gharialctl set` accepts.
-            other if is_layout_key(other) => {
-                Ok(Self::Layout {
-                    key: other.to_string(),
-                    args: rest.iter().map(|s| (*s).to_string()).collect(),
-                })
-            }
+            other if is_layout_key(other) => Ok(Self::Layout {
+                key: other.to_string(),
+                args: rest.iter().map(|s| (*s).to_string()).collect(),
+            }),
             other => Err(format!("unknown action: {other}")),
         }
     }
 }
 
 fn is_layout_key(s: &str) -> bool {
-    matches!(s,
-        "main-ratio" | "main-count" | "gaps" | "outer-padding" | "orientation"
-        | "smart-gaps" | "border-width" | "border-color-focused"
-        | "border-color-unfocused"
+    matches!(
+        s,
+        "main-ratio"
+            | "main-count"
+            | "gaps"
+            | "outer-padding"
+            | "orientation"
+            | "smart-gaps"
+            | "border-width"
+            | "border-color-focused"
+            | "border-color-unfocused"
     )
 }
 
 fn parse_tag_action(tokens: &[&str]) -> Result<Action, String> {
-    let (&sub, rest) = tokens.split_first()
+    let (&sub, rest) = tokens
+        .split_first()
         .ok_or("tag: expected focus|toggle|move|window-toggle")?;
-    let n: u8 = rest.first()
+    let n: u8 = rest
+        .first()
         .copied()
         .ok_or_else(|| format!("tag {sub}: missing tag number 1..32"))?
         .parse()
@@ -240,8 +256,13 @@ mod tests {
 
     #[test]
     fn parse_action_mode() {
-        assert!(matches!(Action::parse(&["mode", "resize"]).unwrap(), Action::EnterMode(s) if s == "resize"));
-        assert!(matches!(Action::parse(&["mode", "exit"]).unwrap(), Action::ExitMode));
+        assert!(
+            matches!(Action::parse(&["mode", "resize"]).unwrap(), Action::EnterMode(s) if s == "resize")
+        );
+        assert!(matches!(
+            Action::parse(&["mode", "exit"]).unwrap(),
+            Action::ExitMode
+        ));
     }
 
     #[test]
@@ -257,10 +278,22 @@ mod tests {
 
     #[test]
     fn parse_action_tag_focus() {
-        assert!(matches!(Action::parse(&["tag", "focus", "3"]).unwrap(), Action::FocusTag(3)));
-        assert!(matches!(Action::parse(&["tag", "toggle", "10"]).unwrap(), Action::ToggleTag(10)));
-        assert!(matches!(Action::parse(&["tag", "move", "1"]).unwrap(), Action::MoveToTag(1)));
-        assert!(matches!(Action::parse(&["tag", "window-toggle", "2"]).unwrap(), Action::ToggleWindowTag(2)));
+        assert!(matches!(
+            Action::parse(&["tag", "focus", "3"]).unwrap(),
+            Action::FocusTag(3)
+        ));
+        assert!(matches!(
+            Action::parse(&["tag", "toggle", "10"]).unwrap(),
+            Action::ToggleTag(10)
+        ));
+        assert!(matches!(
+            Action::parse(&["tag", "move", "1"]).unwrap(),
+            Action::MoveToTag(1)
+        ));
+        assert!(matches!(
+            Action::parse(&["tag", "window-toggle", "2"]).unwrap(),
+            Action::ToggleWindowTag(2)
+        ));
     }
 
     #[test]
@@ -278,7 +311,10 @@ mod tests {
 
     #[test]
     fn parse_action_toggle_float() {
-        assert!(matches!(Action::parse(&["toggle-float"]).unwrap(), Action::ToggleFloat));
+        assert!(matches!(
+            Action::parse(&["toggle-float"]).unwrap(),
+            Action::ToggleFloat
+        ));
     }
 
     #[test]
@@ -286,7 +322,10 @@ mod tests {
         // Close takes no args. Extra args are tolerated rather than
         // erroring — keybindings that pass trailing whitespace would
         // otherwise mysteriously fail.
-        assert!(matches!(Action::parse(&["close", "ignored"]).unwrap(), Action::Close));
+        assert!(matches!(
+            Action::parse(&["close", "ignored"]).unwrap(),
+            Action::Close
+        ));
     }
 
     #[test]

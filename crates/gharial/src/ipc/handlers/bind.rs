@@ -1,8 +1,8 @@
 //! `bind` and `unbind` IPC verbs.
 //!
 //! Grammar:
-//!   bind   [--mode MODE] <chord> <action ...>
-//!   unbind [--mode MODE] <chord>
+//!   `bind   [--mode MODE] <chord> <action ...>`
+//!   `unbind [--mode MODE] <chord>`
 //!
 //! Both validate eagerly so a typo in `~/.config/gharial/init` fails at
 //! the IPC reply rather than from a daemon log line at fire-time. The
@@ -35,11 +35,15 @@ pub fn bind(shared: &Shared, args: &[&str]) -> (Response, bool) {
         Err(e) => return (Response::err(e), false),
     };
 
-    send(shared, Action::Bind {
-        spec,
-        action: Box::new(action),
-        mode: mode.to_string(),
-    }, "bind queued")
+    send(
+        shared,
+        Action::Bind {
+            spec,
+            action: Box::new(action),
+            mode: mode.to_string(),
+        },
+        "bind queued",
+    )
 }
 
 pub fn unbind(shared: &Shared, args: &[&str]) -> (Response, bool) {
@@ -55,7 +59,14 @@ pub fn unbind(shared: &Shared, args: &[&str]) -> (Response, bool) {
         Ok(s) => s,
         Err(e) => return (Response::err(e), false),
     };
-    send(shared, Action::Unbind { spec, mode: mode.to_string() }, "unbind queued")
+    send(
+        shared,
+        Action::Unbind {
+            spec,
+            mode: mode.to_string(),
+        },
+        "unbind queued",
+    )
 }
 
 fn split_mode<'a>(args: &'a [&'a str]) -> Result<(&'a str, &'a [&'a str]), String> {

@@ -31,7 +31,11 @@ fn set_then_get_roundtrip() {
     let shared = Shared::new(Params::default());
     let _server = Server::start_at(path.clone(), shared, None).unwrap();
 
-    let resp = send_one(&path, &Request::new("set", vec!["gaps".into(), "12".into()])).unwrap();
+    let resp = send_one(
+        &path,
+        &Request::new("set", vec!["gaps".into(), "12".into()]),
+    )
+    .unwrap();
     assert!(resp.is_ok(), "set failed: {resp:?}");
     let resp = send_one(&path, &Request::new("get", vec!["gaps".into()])).unwrap();
     assert_eq!(resp, Response::ok("12"));
@@ -56,7 +60,14 @@ fn status_lists_all_keys() {
         Response::Ok(b) => b,
         other => panic!("expected ok, got {other:?}"),
     };
-    for key in ["main-ratio", "main-count", "gaps", "outer-padding", "orientation", "smart-gaps"] {
+    for key in [
+        "main-ratio",
+        "main-count",
+        "gaps",
+        "outer-padding",
+        "orientation",
+        "smart-gaps",
+    ] {
         assert!(body.contains(key), "missing {key} in {body}");
     }
 }
@@ -78,14 +89,25 @@ fn ipc_set_marks_state_dirty_and_notifies() {
     assert!(resp.is_ok());
 
     // Real change: notify expected, dirty flag set.
-    let resp = send_one(&path, &Request::new("set", vec!["gaps".into(), "20".into()])).unwrap();
+    let resp = send_one(
+        &path,
+        &Request::new("set", vec!["gaps".into(), "20".into()]),
+    )
+    .unwrap();
     assert!(resp.is_ok());
-    assert!(shared.take_dirty(), "ipc-driven set must set the dirty flag");
+    assert!(
+        shared.take_dirty(),
+        "ipc-driven set must set the dirty flag"
+    );
 
     // Wait briefly for the notify to be delivered from the IPC thread.
     let deadline = Instant::now() + Duration::from_millis(500);
     while count.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(count.load(Ordering::SeqCst), 1, "notifier should fire exactly once for a real change");
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "notifier should fire exactly once for a real change"
+    );
 }

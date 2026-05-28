@@ -4,7 +4,7 @@
 
 pub mod bind;
 pub mod layout;
-pub mod mode;
 pub mod misc;
+pub mod mode;
 pub mod tag;
 pub mod window;

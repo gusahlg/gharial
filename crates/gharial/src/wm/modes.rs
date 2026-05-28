@@ -14,7 +14,8 @@ pub struct Modes {
 
 impl Default for Modes {
     fn default() -> Self {
-        Self { active: DEFAULT_MODE.into() }
+        Self {
+            active: DEFAULT_MODE.into(),
+        }
     }
 }
-

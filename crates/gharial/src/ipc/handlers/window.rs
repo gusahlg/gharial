@@ -50,7 +50,10 @@ pub fn spawn(shared: &Shared, args: &[&str]) -> (Response, bool) {
     let args: Vec<String> = rest.iter().map(|s| (*s).to_string()).collect();
     send(
         shared,
-        Action::Spawn { cmd: cmd.to_string(), args },
+        Action::Spawn {
+            cmd: cmd.to_string(),
+            args,
+        },
         "spawn queued",
     )
 }

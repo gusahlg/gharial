@@ -1,18 +1,15 @@
 //! Dispatch table for `river_window_manager_v1` — the top-level driver
 //! of the manage/render loop.
 //!
-//! On `manage_start` we recompute layout targets and flush window
-//! management requests, then immediately `manage_finish`. On
-//! `render_start` we recompute again (in case any window-issued
-//! dimensions came back between phases) and flush rendering requests
-//! before `render_finish`.
+//! On `manage_start` we drain pending policy changes, refresh cached
+//! layout targets when dirty, flush window-management requests, then
+//! immediately `manage_finish`. On `render_start` we reuse those cached
+//! targets unless an intervening event invalidated them.
 
 use wayland_client::{event_created_child, Connection, Dispatch, Proxy, QueueHandle};
 
 use crate::wayland_proto::window_management::river_window_manager_v1 as iface;
-use crate::wayland_proto::{
-    RiverOutputV1, RiverSeatV1, RiverWindowManagerV1, RiverWindowV1,
-};
+use crate::wayland_proto::{RiverOutputV1, RiverSeatV1, RiverWindowManagerV1, RiverWindowV1};
 
 use super::super::actions::{self, ensure_focus_invariant, set_focus};
 use super::super::outputs::OutputEntry;
@@ -54,14 +51,14 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
                 }
                 drain_pending_focus(state);
                 ensure_focus_invariant(state);
-                let targets = render::compute_targets(state);
+                let targets = render::targets(state);
                 render::flush_manage(state, &targets);
                 proxy.manage_finish();
                 state.sequence.exit_manage();
             }
             iface::Event::RenderStart => {
                 state.sequence.enter_render();
-                let targets = render::compute_targets(state);
+                let targets = render::targets(state);
                 render::flush_render(state, &targets);
                 proxy.render_finish();
                 state.sequence.exit_render();
@@ -71,30 +68,28 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
                 let window_id = entry.proxy.id();
                 state.windows.insert(entry);
                 state.pending_focus.push(window_id);
+                state.mark_layout_dirty();
             }
             iface::Event::Output { id } => {
                 let mut entry = OutputEntry::new(id);
                 // Pair every river_output_v1 with a layer-shell handle
                 // so panels/launchers on that output are accepted by
                 // river. `set_default` follows in manage_start.
-                entry.layer_shell = Some(
-                    state.globals.layer_shell.get_output(
-                        &entry.proxy,
-                        &state.qh,
-                        (),
-                    ),
-                );
+                entry.layer_shell = Some(state.globals.layer_shell.get_output(
+                    &entry.proxy,
+                    &state.qh,
+                    (),
+                ));
                 state.outputs.insert(entry);
+                state.mark_layout_dirty();
             }
             iface::Event::Seat { id } => {
                 let mut entry = SeatEntry::new(id);
-                entry.layer_shell = Some(
-                    state.globals.layer_shell.get_seat(
-                        &entry.proxy,
-                        &state.qh,
-                        (),
-                    ),
-                );
+                entry.layer_shell = Some(state.globals.layer_shell.get_seat(
+                    &entry.proxy,
+                    &state.qh,
+                    (),
+                ));
                 state.seats.insert(entry);
             }
             iface::Event::SessionLocked | iface::Event::SessionUnlocked => {
@@ -143,10 +138,11 @@ fn ensure_layer_shell_default(state: &mut World) {
 /// burst of opens lands on the visually topmost window.
 fn drain_pending_focus(state: &mut World) {
     let pending = std::mem::take(&mut state.pending_focus);
-    let Some(seat_id) = state.seats.primary().map(|s| s.id()) else { return };
+    let Some(seat_id) = state.seats.primary().map(|s| s.id()) else {
+        return;
+    };
     for id in pending.into_iter().rev() {
-        let visible = state.windows.get(&id).is_some_and(|w| w.visible);
-        if visible {
+        if state.windows.is_visible(&id) {
             set_focus(state, &seat_id, &id);
             return;
         }

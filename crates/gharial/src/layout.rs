@@ -102,7 +102,15 @@ pub fn compute(view_count: u32, usable: (u32, u32), p: &Params) -> Vec<Rect> {
     let iw = uw - 2 * outer;
     let ih = uh - 2 * outer;
     if iw <= 0 || ih <= 0 {
-        return vec![Rect { x: 0, y: 0, w: usable.0, h: usable.1 }; view_count as usize];
+        return vec![
+            Rect {
+                x: 0,
+                y: 0,
+                w: usable.0,
+                h: usable.1
+            };
+            view_count as usize
+        ];
     }
 
     let n = view_count;
@@ -155,8 +163,24 @@ pub fn compute(view_count: u32, usable: (u32, u32), p: &Params) -> Vec<Rect> {
     };
 
     let mut out = Vec::with_capacity(n as usize);
-    out.extend(split(main_box.0, main_box.1, main_box.2, main_box.3, main_count, gap, p.orientation));
-    out.extend(split(stack_box.0, stack_box.1, stack_box.2, stack_box.3, stack_count, gap, p.orientation));
+    out.extend(split(
+        main_box.0,
+        main_box.1,
+        main_box.2,
+        main_box.3,
+        main_count,
+        gap,
+        p.orientation,
+    ));
+    out.extend(split(
+        stack_box.0,
+        stack_box.1,
+        stack_box.2,
+        stack_box.3,
+        stack_count,
+        gap,
+        p.orientation,
+    ));
     out
 }
 
@@ -229,24 +253,72 @@ mod tests {
     #[test]
     fn single_view_fills_area() {
         let r = compute(1, (1920, 1080), &p(1, 0.5));
-        assert_eq!(r, vec![Rect { x: 0, y: 0, w: 1920, h: 1080 }]);
+        assert_eq!(
+            r,
+            vec![Rect {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1080
+            }]
+        );
     }
 
     #[test]
     fn two_views_left_orientation_splits_at_ratio() {
         let r = compute(2, (1000, 500), &p(1, 0.5));
         assert_eq!(r.len(), 2);
-        assert_eq!(r[0], Rect { x: 0, y: 0, w: 500, h: 500 });
-        assert_eq!(r[1], Rect { x: 500, y: 0, w: 500, h: 500 });
+        assert_eq!(
+            r[0],
+            Rect {
+                x: 0,
+                y: 0,
+                w: 500,
+                h: 500
+            }
+        );
+        assert_eq!(
+            r[1],
+            Rect {
+                x: 500,
+                y: 0,
+                w: 500,
+                h: 500
+            }
+        );
     }
 
     #[test]
     fn three_views_one_main_two_stack() {
         let r = compute(3, (1000, 500), &p(1, 0.6));
         assert_eq!(r.len(), 3);
-        assert_eq!(r[0], Rect { x: 0, y: 0, w: 600, h: 500 });
-        assert_eq!(r[1], Rect { x: 600, y: 0, w: 400, h: 250 });
-        assert_eq!(r[2], Rect { x: 600, y: 250, w: 400, h: 250 });
+        assert_eq!(
+            r[0],
+            Rect {
+                x: 0,
+                y: 0,
+                w: 600,
+                h: 500
+            }
+        );
+        assert_eq!(
+            r[1],
+            Rect {
+                x: 600,
+                y: 0,
+                w: 400,
+                h: 250
+            }
+        );
+        assert_eq!(
+            r[2],
+            Rect {
+                x: 600,
+                y: 250,
+                w: 400,
+                h: 250
+            }
+        );
     }
 
     #[test]
@@ -256,7 +328,15 @@ mod tests {
         params.outer_padding = 20;
         params.smart_gaps = true;
         let r = compute(1, (800, 600), &params);
-        assert_eq!(r[0], Rect { x: 0, y: 0, w: 800, h: 600 });
+        assert_eq!(
+            r[0],
+            Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600
+            }
+        );
     }
 
     #[test]
@@ -268,8 +348,24 @@ mod tests {
         // Inner: 1000-40 = 960 wide, 500-40 = 460 tall.
         // Split: (960-10)/2 = 475 each.
         let r = compute(2, (1000, 500), &params);
-        assert_eq!(r[0], Rect { x: 20, y: 20, w: 475, h: 460 });
-        assert_eq!(r[1], Rect { x: 20 + 475 + 10, y: 20, w: 475, h: 460 });
+        assert_eq!(
+            r[0],
+            Rect {
+                x: 20,
+                y: 20,
+                w: 475,
+                h: 460
+            }
+        );
+        assert_eq!(
+            r[1],
+            Rect {
+                x: 20 + 475 + 10,
+                y: 20,
+                w: 475,
+                h: 460
+            }
+        );
     }
 
     #[test]
@@ -277,8 +373,24 @@ mod tests {
         let mut params = p(1, 0.5);
         params.orientation = Orientation::Right;
         let r = compute(2, (1000, 500), &params);
-        assert_eq!(r[0], Rect { x: 500, y: 0, w: 500, h: 500 });
-        assert_eq!(r[1], Rect { x: 0, y: 0, w: 500, h: 500 });
+        assert_eq!(
+            r[0],
+            Rect {
+                x: 500,
+                y: 0,
+                w: 500,
+                h: 500
+            }
+        );
+        assert_eq!(
+            r[1],
+            Rect {
+                x: 0,
+                y: 0,
+                w: 500,
+                h: 500
+            }
+        );
     }
 
     #[test]
@@ -286,9 +398,33 @@ mod tests {
         let mut params = p(1, 0.5);
         params.orientation = Orientation::Top;
         let r = compute(3, (1000, 600), &params);
-        assert_eq!(r[0], Rect { x: 0, y: 0, w: 1000, h: 300 });
-        assert_eq!(r[1], Rect { x: 0, y: 300, w: 500, h: 300 });
-        assert_eq!(r[2], Rect { x: 500, y: 300, w: 500, h: 300 });
+        assert_eq!(
+            r[0],
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1000,
+                h: 300
+            }
+        );
+        assert_eq!(
+            r[1],
+            Rect {
+                x: 0,
+                y: 300,
+                w: 500,
+                h: 300
+            }
+        );
+        assert_eq!(
+            r[2],
+            Rect {
+                x: 500,
+                y: 300,
+                w: 500,
+                h: 300
+            }
+        );
     }
 
     #[test]
@@ -301,7 +437,12 @@ mod tests {
 
     #[test]
     fn orientation_roundtrip() {
-        for o in [Orientation::Left, Orientation::Right, Orientation::Top, Orientation::Bottom] {
+        for o in [
+            Orientation::Left,
+            Orientation::Right,
+            Orientation::Top,
+            Orientation::Bottom,
+        ] {
             assert_eq!(Orientation::from_str(o.as_str()), Ok(o));
         }
     }

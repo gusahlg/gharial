@@ -86,6 +86,34 @@ impl Windows {
         self.order.clone()
     }
 
+    pub fn visible_ids(&self) -> Vec<ObjectId> {
+        self.order
+            .iter()
+            .filter(|id| self.is_visible(id))
+            .cloned()
+            .collect()
+    }
+
+    pub fn visible_tiled_ids(&self) -> Vec<ObjectId> {
+        self.order
+            .iter()
+            .filter(|id| self.is_visible_tiled(id))
+            .cloned()
+            .collect()
+    }
+
+    pub fn is_visible(&self, id: &ObjectId) -> bool {
+        self.by_id.get(id).is_some_and(|w| w.visible)
+    }
+
+    pub fn is_visible_tiled(&self, id: &ObjectId) -> bool {
+        self.by_id.get(id).is_some_and(|w| w.visible && !w.floating)
+    }
+
+    pub fn index_of(&self, id: &ObjectId) -> Option<usize> {
+        self.order.iter().position(|other| other == id)
+    }
+
     pub fn insert(&mut self, entry: WindowEntry) {
         let id = entry.id();
         self.order.push(id.clone());
@@ -99,6 +127,14 @@ impl Windows {
 
     pub fn swap(&mut self, i: usize, j: usize) {
         self.order.swap(i, j);
+    }
+
+    pub fn swap_ids(&mut self, a: &ObjectId, b: &ObjectId) -> bool {
+        let (Some(i), Some(j)) = (self.index_of(a), self.index_of(b)) else {
+            return false;
+        };
+        self.swap(i, j);
+        true
     }
 }
 

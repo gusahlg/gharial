@@ -11,9 +11,11 @@ use crate::action::Action;
 use crate::state::Shared;
 
 use super::bindings::Bindings;
+use super::focus::FocusMemory;
 use super::globals::Globals;
 use super::modes::Modes;
 use super::outputs::Outputs;
+use super::render::TargetCache;
 use super::seats::Seats;
 use super::sequence::Sequence;
 use super::tags::Tags;
@@ -30,6 +32,8 @@ pub struct World {
     pub bindings: Bindings,
     pub modes: Modes,
     pub tags: Tags,
+    pub focus: FocusMemory<ObjectId>,
+    pub target_cache: TargetCache,
     /// Actions sent from the IPC thread that need to be applied during
     /// the next manage sequence. Drained at the top of `manage_start`.
     pub pending_actions: VecDeque<Action>,
@@ -52,6 +56,8 @@ impl World {
             bindings: Bindings::default(),
             modes: Modes::default(),
             tags: Tags::default(),
+            focus: FocusMemory::default(),
+            target_cache: TargetCache::default(),
             pending_actions: VecDeque::new(),
             pending_focus: Vec::new(),
             running: true,
@@ -64,5 +70,9 @@ impl World {
 
     pub fn shutdown(&mut self) {
         self.running = false;
+    }
+
+    pub fn mark_layout_dirty(&mut self) {
+        self.target_cache.mark_dirty();
     }
 }
