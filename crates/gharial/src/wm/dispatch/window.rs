@@ -22,6 +22,7 @@ impl Dispatch<RiverWindowV1, ()> for World {
             iface::Event::Closed => {
                 // Destroy must follow `closed`, per protocol.
                 if let Some(entry) = state.windows.remove(&id) {
+                    state.tags.forget_window(&id);
                     entry.node.destroy();
                     entry.proxy.destroy();
                 }

@@ -12,7 +12,7 @@ use crate::action::{Action, BindingSpec, Direction};
 use super::bindings::{install_binding, refresh_mode_enables};
 use super::render;
 use super::spatial::pick_neighbor;
-use super::tags::{set_visibility_targets, tag_mask};
+use super::tags::{pick_focus_candidate, set_visibility_targets, tag_mask};
 use super::world::World;
 
 pub fn execute(action: Action, world: &mut World) {
@@ -64,9 +64,15 @@ fn spawn(cmd: &str, args: &[String]) {
 }
 
 fn close_focused(world: &mut World) {
-    let Some(seat) = world.seats.primary() else { return };
-    let Some(focused) = seat.focused.as_ref() else { return };
-    let Some(window) = world.windows.get(focused) else { return };
+    let Some(seat) = world.seats.primary() else {
+        return;
+    };
+    let Some(focused) = seat.focused.as_ref() else {
+        return;
+    };
+    let Some(window) = world.windows.get(focused) else {
+        return;
+    };
     window.proxy.close();
 }
 
@@ -88,7 +94,9 @@ fn focus_stack(world: &mut World, dir: Direction) {
     if visible.is_empty() {
         return;
     }
-    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else { return };
+    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
+        return;
+    };
     let current = world.seats.get(&seat_id).and_then(|s| s.focused.clone());
     let current_idx = current
         .as_ref()
@@ -105,7 +113,9 @@ fn focus_stack(world: &mut World, dir: Direction) {
 }
 
 fn focus_spatial(world: &mut World, dir: Direction) {
-    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else { return };
+    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
+        return;
+    };
     let targets = render::compute_targets(world);
     if targets.is_empty() {
         return;
@@ -138,8 +148,12 @@ fn focus_spatial(world: &mut World, dir: Direction) {
 }
 
 fn toggle_float(world: &mut World) {
-    let Some(seat) = world.seats.primary() else { return };
-    let Some(focused) = seat.focused.clone() else { return };
+    let Some(seat) = world.seats.primary() else {
+        return;
+    };
+    let Some(focused) = seat.focused.clone() else {
+        return;
+    };
     if let Some(entry) = world.windows.get_mut(&focused) {
         entry.floating = !entry.floating;
         // Force re-evaluation: clear our cached "last position" so
@@ -159,14 +173,20 @@ fn toggle_float(world: &mut World) {
 
 fn swap_direction(world: &mut World, dir: Direction) {
     let ordered = world.windows.ordered_ids();
-    let Some(seat) = world.seats.primary() else { return };
-    let Some(focused) = seat.focused.clone() else { return };
+    let Some(seat) = world.seats.primary() else {
+        return;
+    };
+    let Some(focused) = seat.focused.clone() else {
+        return;
+    };
 
     let target_id = if dir.is_spatial() {
         // Spatial: find the directional neighbour via the same picker
         // focus uses, so swap pairs match what the user sees.
         let targets = render::compute_targets(world);
-        let Some(current_rect) = targets.get(&focused).copied() else { return };
+        let Some(current_rect) = targets.get(&focused).copied() else {
+            return;
+        };
         let rects: Vec<_> = targets.into_iter().collect();
         match pick_neighbor(&rects, &focused, current_rect, dir) {
             Some(id) => id,
@@ -182,7 +202,9 @@ fn swap_direction(world: &mut World, dir: Direction) {
         if visible.len() < 2 {
             return;
         }
-        let Some(v_idx) = visible.iter().position(|id| id == &focused) else { return };
+        let Some(v_idx) = visible.iter().position(|id| id == &focused) else {
+            return;
+        };
         match dir {
             Direction::Next => visible[(v_idx + 1) % visible.len()].clone(),
             Direction::Prev => visible[(v_idx + visible.len() - 1) % visible.len()].clone(),
@@ -242,8 +264,12 @@ fn toggle_tag(world: &mut World, n: u8) {
 }
 
 fn move_to_tag(world: &mut World, n: u8) {
-    let Some(seat) = world.seats.primary() else { return };
-    let Some(focused) = seat.focused.clone() else { return };
+    let Some(seat) = world.seats.primary() else {
+        return;
+    };
+    let Some(focused) = seat.focused.clone() else {
+        return;
+    };
     if let Some(entry) = world.windows.get_mut(&focused) {
         entry.tags = tag_mask(n);
     }
@@ -251,8 +277,12 @@ fn move_to_tag(world: &mut World, n: u8) {
 }
 
 fn toggle_window_tag(world: &mut World, n: u8) {
-    let Some(seat) = world.seats.primary() else { return };
-    let Some(focused) = seat.focused.clone() else { return };
+    let Some(seat) = world.seats.primary() else {
+        return;
+    };
+    let Some(focused) = seat.focused.clone() else {
+        return;
+    };
     if let Some(entry) = world.windows.get_mut(&focused) {
         entry.tags ^= tag_mask(n);
         if entry.tags == 0 {
@@ -265,8 +295,11 @@ fn toggle_window_tag(world: &mut World, n: u8) {
 fn apply_tag_change(world: &mut World) {
     set_visibility_targets(world);
     // Refocus: if the previously focused window is no longer visible,
-    // jump to the first visible one.
-    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else { return };
+    // restore the remembered focus for the active tag before falling
+    // back to stack order.
+    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
+        return;
+    };
     let still_visible = world
         .seats
         .get(&seat_id)
@@ -275,11 +308,7 @@ fn apply_tag_change(world: &mut World) {
         .map(|w| w.visible)
         .unwrap_or(false);
     if !still_visible {
-        let next = world
-            .windows
-            .ordered_ids()
-            .into_iter()
-            .find(|id| world.windows.get(id).is_some_and(|w| w.visible));
+        let next = focus_candidate(world);
         match next {
             Some(id) => set_focus(world, &seat_id, &id),
             None => clear_focus(world, &seat_id),
@@ -292,17 +321,22 @@ pub(super) fn set_focus(
     seat_id: &wayland_client::backend::ObjectId,
     window_id: &wayland_client::backend::ObjectId,
 ) {
-    let Some(window) = world.windows.get(window_id) else { return };
-    if let Some(seat) = world.seats.get_mut(seat_id) {
-        seat.proxy.focus_window(&window.proxy);
-        seat.focused = Some(window_id.clone());
+    let Some(window) = world.windows.get(window_id) else {
+        return;
+    };
+    if !window.visible {
+        return;
     }
+    let window_tags = window.tags;
+    let Some(seat) = world.seats.get_mut(seat_id) else {
+        return;
+    };
+    seat.proxy.focus_window(&window.proxy);
+    seat.focused = Some(window_id.clone());
+    world.tags.remember_focus(window_id, window_tags);
 }
 
-pub(super) fn clear_focus(
-    world: &mut World,
-    seat_id: &wayland_client::backend::ObjectId,
-) {
+pub(super) fn clear_focus(world: &mut World, seat_id: &wayland_client::backend::ObjectId) {
     if let Some(seat) = world.seats.get_mut(seat_id) {
         seat.proxy.clear_focus();
         seat.focused = None;
@@ -310,11 +344,14 @@ pub(super) fn clear_focus(
 }
 
 /// "Always something focused" invariant — if the seat's focused window
-/// has been closed or hidden, repoint focus to the first visible
-/// window, or clear focus only when literally no visible windows exist.
-/// Called at the tail of every `manage_start` drain.
+/// has been closed or hidden, restore the active tag's remembered focus
+/// or fall back to the first visible window. Clear focus only when
+/// literally no visible windows exist. Called at the tail of every
+/// `manage_start` drain.
 pub(super) fn ensure_focus_invariant(world: &mut World) {
-    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else { return };
+    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
+        return;
+    };
     // Don't compete with layer surfaces: while a launcher / panel has
     // keyboard focus (exclusive or non-exclusive), the protocol says
     // a focus_window request during the same manage sequence cancels
@@ -335,13 +372,17 @@ pub(super) fn ensure_focus_invariant(world: &mut World) {
     if still_good {
         return;
     }
-    let next = world
-        .windows
-        .ordered_ids()
-        .into_iter()
-        .find(|id| world.windows.get(id).is_some_and(|w| w.visible));
+    let next = focus_candidate(world);
     match next {
         Some(id) => set_focus(world, &seat_id, &id),
         None => clear_focus(world, &seat_id),
     }
+}
+
+fn focus_candidate(world: &World) -> Option<wayland_client::backend::ObjectId> {
+    let remembered = world.tags.focus_candidates();
+    let ordered = world.windows.ordered_ids();
+    pick_focus_candidate(remembered, ordered, |id| {
+        world.windows.get(id).is_some_and(|w| w.visible)
+    })
 }
