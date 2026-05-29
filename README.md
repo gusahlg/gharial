@@ -209,3 +209,12 @@ Run `gharialctl --help` for the full verb list.
 The three vendored XML files in `crates/gharial/protocol/` are pinned
 to upstream river commit `da8cf20fcb2c993c1c048ced4020c58d6208ef26`.
 See `crates/gharial/protocol/README.md` for upgrade instructions.
+
+## License
+
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

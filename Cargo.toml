@@ -9,7 +9,7 @@ members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2021"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 authors = ["gusahlg"]
 repository = "https://github.com/gusahlg/gharial"
 rust-version = "1.75"
