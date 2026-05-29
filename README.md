@@ -156,7 +156,8 @@ the repo for a declarative install that places `/etc/river/init`.
 ## Configuring
 
 Your entire desktop lives in `~/.config/river/init`. It's a plain
-`sh` script. After `gharial &`, every line is a `gharialctl` call:
+`sh` script, very simple and gives room for a lot of cool stuff.
+After `gharial &`, every line is a `gharialctl` call:
 bindings, modes, layout params, autostart programs.
 
 The recommended skeleton:
@@ -182,7 +183,7 @@ gharialctl bind Super+L       focus next
 gharialctl bind Super+1       tag focus 1
 
 # Autostart
-gharialctl spawn waybar
+gharialctl spawn waybar # (if you use waybar)
 wait
 ```
 
