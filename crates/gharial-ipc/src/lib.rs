@@ -311,4 +311,68 @@ mod tests {
         assert!(s.starts_with("ok a\\nb"));
         assert_eq!(Response::parse(&s).unwrap(), r);
     }
+
+    #[test]
+    fn tokenize_handles_internal_backslash_escapes() {
+        // `\"`, `\\`, `\n`, `\t` are escapes inside quoted strings.
+        let r = Request::parse(r#"say "hello\tworld\nbye""#).unwrap();
+        assert_eq!(r.command, "say");
+        assert_eq!(r.args, vec!["hello\tworld\nbye".to_string()]);
+    }
+
+    #[test]
+    fn tokenize_unterminated_quote_errors() {
+        let err = Request::parse(r#"say "hello"#).unwrap_err();
+        assert_eq!(err, ParseError::UnterminatedQuote);
+    }
+
+    #[test]
+    fn tokenize_empty_input_errors() {
+        // Whitespace-only and empty both come back as Empty.
+        assert_eq!(Request::parse("").unwrap_err(), ParseError::Empty);
+        assert_eq!(Request::parse("   ").unwrap_err(), ParseError::Empty);
+    }
+
+    #[test]
+    fn response_parse_rejects_bogus_tag() {
+        let err = Response::parse("nope hello").unwrap_err();
+        assert!(matches!(err, ParseError::BadTag(t) if t == "nope"));
+    }
+
+    #[test]
+    fn response_round_trips_special_characters() {
+        // Bodies with embedded backslashes/quotes/control bytes must
+        // come back unchanged via encode → parse.
+        let bodies = [
+            "plain text",
+            "with \"quotes\" inside",
+            "back\\slash\\here",
+            "tab\there",
+            "newline\nhere",
+        ];
+        for body in bodies {
+            let r = Response::ok(body);
+            let s = r.encode();
+            let p = Response::parse(&s).unwrap_or_else(|e| panic!("{body:?}: {e}"));
+            assert_eq!(p, r);
+        }
+    }
+
+    #[test]
+    fn request_encode_preserves_unicode() {
+        let r = Request::new("spawn", vec!["tofi-drun".into(), "résumé".into()]);
+        let encoded = r.encode();
+        let parsed = Request::parse(encoded.trim_end()).unwrap();
+        assert_eq!(parsed, r);
+    }
+
+    #[test]
+    fn empty_string_argument_is_quoted_through_a_round_trip() {
+        let r = Request::new("set", vec!["key".into(), "".into()]);
+        let encoded = r.encode();
+        // The empty arg requires quoting so the parser sees it.
+        assert!(encoded.contains("\"\""));
+        let parsed = Request::parse(encoded.trim_end()).unwrap();
+        assert_eq!(parsed, r);
+    }
 }

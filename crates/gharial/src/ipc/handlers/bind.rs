@@ -13,6 +13,8 @@ use gharial_ipc::Response;
 use crate::action::{Action, BindingSpec};
 use crate::state::Shared;
 
+use super::queue;
+
 const DEFAULT_MODE: &str = "default";
 
 pub fn bind(shared: &Shared, args: &[&str]) -> (Response, bool) {
@@ -35,7 +37,7 @@ pub fn bind(shared: &Shared, args: &[&str]) -> (Response, bool) {
         Err(e) => return (Response::err(e), false),
     };
 
-    send(
+    queue(
         shared,
         Action::Bind {
             spec,
@@ -59,7 +61,7 @@ pub fn unbind(shared: &Shared, args: &[&str]) -> (Response, bool) {
         Ok(s) => s,
         Err(e) => return (Response::err(e), false),
     };
-    send(
+    queue(
         shared,
         Action::Unbind {
             spec,
@@ -78,12 +80,5 @@ fn split_mode<'a>(args: &'a [&'a str]) -> Result<(&'a str, &'a [&'a str]), Strin
             Ok((mode, after))
         }
         _ => Ok((DEFAULT_MODE, args)),
-    }
-}
-
-fn send(shared: &Shared, action: Action, ok_msg: &str) -> (Response, bool) {
-    match shared.send_action(action) {
-        Ok(()) => (Response::ok(ok_msg), false),
-        Err(e) => (Response::err(e), false),
     }
 }

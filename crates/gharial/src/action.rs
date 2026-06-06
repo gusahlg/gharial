@@ -79,6 +79,18 @@ impl Direction {
         }
     }
 
+    /// Canonical token form. Round-trips with [`Direction::parse`].
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Next => "next",
+            Self::Prev => "prev",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Up => "up",
+            Self::Down => "down",
+        }
+    }
+
     /// `true` for the four cardinal directions that depend on actual
     /// window geometry rather than the stack-insertion order.
     pub fn is_spatial(self) -> bool {
@@ -122,11 +134,17 @@ impl Action {
         match cmd {
             "close" => Ok(Self::Close),
             "focus" => {
-                let dir = rest.first().copied().ok_or("focus: expected next|prev")?;
+                let dir = rest
+                    .first()
+                    .copied()
+                    .ok_or("focus: expected next|prev|left|right|up|down")?;
                 Direction::parse(dir).map(Self::FocusDirection)
             }
             "swap" => {
-                let dir = rest.first().copied().ok_or("swap: expected next|prev")?;
+                let dir = rest
+                    .first()
+                    .copied()
+                    .ok_or("swap: expected next|prev|left|right|up|down")?;
                 Direction::parse(dir).map(Self::SwapDirection)
             }
             "spawn" => {
@@ -157,19 +175,174 @@ impl Action {
     }
 }
 
-fn is_layout_key(s: &str) -> bool {
-    matches!(
-        s,
-        "main-ratio"
-            | "main-count"
-            | "gaps"
-            | "outer-padding"
-            | "orientation"
-            | "smart-gaps"
-            | "border-width"
-            | "border-color-focused"
-            | "border-color-unfocused"
-    )
+/// The keys the layout-param grammar accepts. Single source of truth —
+/// `Action::parse`, the IPC dispatcher, and `Shared::apply` all consult
+/// this list (directly or transitively) so adding a new key is one edit.
+pub const LAYOUT_KEYS: &[&str] = &[
+    "main-ratio",
+    "main-count",
+    "gaps",
+    "outer-padding",
+    "orientation",
+    "smart-gaps",
+    "border-width",
+    "border-color-focused",
+    "border-color-unfocused",
+];
+
+pub fn is_layout_key(s: &str) -> bool {
+    LAYOUT_KEYS.contains(&s)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Encoding side — produce the wire-token list for an Action so the
+// public Rust API can ship the same vocabulary as gharialctl.
+
+impl Action {
+    /// Encode this action as the token list the daemon expects when it
+    /// fires (matching what [`Action::parse`] would accept).
+    ///
+    /// Round-trips: `Action::parse(&action.to_tokens().iter().map(|s| s.as_str()).collect::<Vec<_>>())`
+    /// recovers `action` for every variant the parser knows about.
+    ///
+    /// `Bind` and `Unbind` are special — they're produced by the IPC
+    /// `bind`/`unbind` verb handlers and consumed by the wm thread, not
+    /// by the action parser. Encoding either yields an empty token list;
+    /// the public `Client` exposes them through dedicated methods.
+    pub fn to_tokens(&self) -> Vec<String> {
+        match self {
+            Self::Close => vec!["close".into()],
+            Self::ToggleFloat => vec!["toggle-float".into()],
+            Self::FocusDirection(dir) => vec!["focus".into(), dir.as_str().into()],
+            Self::SwapDirection(dir) => vec!["swap".into(), dir.as_str().into()],
+            Self::Spawn { cmd, args } => {
+                let mut out = Vec::with_capacity(args.len() + 2);
+                out.push("spawn".into());
+                out.push(cmd.clone());
+                out.extend(args.iter().cloned());
+                out
+            }
+            Self::Layout { key, args } => {
+                let mut out = Vec::with_capacity(args.len() + 1);
+                out.push(key.clone());
+                out.extend(args.iter().cloned());
+                out
+            }
+            Self::EnterMode(name) => vec!["mode".into(), name.clone()],
+            Self::ExitMode => vec!["mode".into(), "exit".into()],
+            Self::FocusTag(n) => vec!["tag".into(), "focus".into(), n.to_string()],
+            Self::ToggleTag(n) => vec!["tag".into(), "toggle".into(), n.to_string()],
+            Self::MoveToTag(n) => vec!["tag".into(), "move".into(), n.to_string()],
+            Self::ToggleWindowTag(n) => {
+                vec!["tag".into(), "window-toggle".into(), n.to_string()]
+            }
+            // Bind/Unbind aren't bindable actions — the Client emits the
+            // `bind`/`unbind` IPC verbs directly. Return empty so misuse
+            // produces an obviously-broken request rather than silent
+            // corruption.
+            Self::Bind { .. } | Self::Unbind { .. } => Vec::new(),
+        }
+    }
+
+    // ── Typed constructors for common cases. ─────────────────────────
+
+    /// Build a `Spawn` action from a command + arg iterator. Strings
+    /// and `&str` both accepted — `Action::spawn("rio", ["-e", "nvim"])`
+    /// and `Action::spawn("rio", [] as [&str; 0])` both compile.
+    pub fn spawn<C, I, S>(cmd: C, args: I) -> Self
+    where
+        C: Into<String>,
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self::Spawn {
+            cmd: cmd.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub fn focus(dir: Direction) -> Self {
+        Self::FocusDirection(dir)
+    }
+
+    pub fn swap(dir: Direction) -> Self {
+        Self::SwapDirection(dir)
+    }
+
+    pub fn enter_mode(name: impl Into<String>) -> Self {
+        Self::EnterMode(name.into())
+    }
+
+    // Layout-param constructors. Each pins the wire form so the daemon
+    // sees the value the user typed — no precision drift across the
+    // round-trip.
+
+    pub fn set_main_ratio(value: f32) -> Self {
+        Self::layout("main-ratio", [format_f32(value)])
+    }
+    pub fn adjust_main_ratio(delta: f32) -> Self {
+        Self::layout("main-ratio", [format_delta_f32(delta)])
+    }
+    pub fn set_main_count(value: u32) -> Self {
+        Self::layout("main-count", [value.to_string()])
+    }
+    pub fn adjust_main_count(delta: i32) -> Self {
+        Self::layout("main-count", [format_delta_i32(delta)])
+    }
+    pub fn set_gaps(value: u32) -> Self {
+        Self::layout("gaps", [value.to_string()])
+    }
+    pub fn adjust_gaps(delta: i32) -> Self {
+        Self::layout("gaps", [format_delta_i32(delta)])
+    }
+    pub fn set_outer_padding(value: u32) -> Self {
+        Self::layout("outer-padding", [value.to_string()])
+    }
+    pub fn adjust_outer_padding(delta: i32) -> Self {
+        Self::layout("outer-padding", [format_delta_i32(delta)])
+    }
+    pub fn set_orientation(o: crate::orientation::Orientation) -> Self {
+        Self::layout("orientation", [o.as_str().to_string()])
+    }
+    pub fn set_smart_gaps(v: crate::value::BoolValue) -> Self {
+        Self::layout("smart-gaps", [v.as_str().to_string()])
+    }
+    pub fn set_border_width(value: u32) -> Self {
+        Self::layout("border-width", [value.to_string()])
+    }
+    pub fn set_border_color_focused(c: crate::color::Color) -> Self {
+        Self::layout("border-color-focused", [c.to_hex_string()])
+    }
+    pub fn set_border_color_unfocused(c: crate::color::Color) -> Self {
+        Self::layout("border-color-unfocused", [c.to_hex_string()])
+    }
+
+    fn layout<I>(key: &str, args: I) -> Self
+    where
+        I: IntoIterator<Item = String>,
+    {
+        Self::Layout {
+            key: key.into(),
+            args: args.into_iter().collect(),
+        }
+    }
+}
+
+fn format_f32(v: f32) -> String {
+    // `%.4f`-equivalent — matches the daemon's own summary formatting
+    // so round-tripping a value through Action → parse → apply yields
+    // the same recorded value.
+    format!("{v:.4}")
+}
+
+fn format_delta_f32(delta: f32) -> String {
+    // `{:+}` formats positives with a leading `+`; the daemon's parser
+    // accepts both `+0.05` and `-0.05` as relative adjustments.
+    format!("{delta:+.4}")
+}
+
+fn format_delta_i32(delta: i32) -> String {
+    format!("{delta:+}")
 }
 
 fn parse_tag_action(tokens: &[&str]) -> Result<Action, String> {
@@ -341,5 +514,265 @@ mod tests {
             Action::parse(&["border-color-focused", "0xFF0000FF"]).unwrap(),
             Action::Layout { .. }
         ));
+    }
+
+    #[test]
+    fn every_layout_key_routes_to_action_layout() {
+        // LAYOUT_KEYS is the single source of truth — every entry must
+        // parse as an Action::Layout, never as an "unknown action".
+        for &key in LAYOUT_KEYS {
+            let parsed = Action::parse(&[key, "0"]).unwrap_or_else(|e| {
+                panic!("LAYOUT_KEYS entry {key:?} should parse as Action::Layout, got: {e}")
+            });
+            match parsed {
+                Action::Layout { key: k, .. } => assert_eq!(k, key),
+                other => panic!("LAYOUT_KEYS entry {key:?} parsed as {other:?}, not Layout"),
+            }
+        }
+    }
+
+    #[test]
+    fn is_layout_key_matches_layout_keys_const() {
+        for &key in LAYOUT_KEYS {
+            assert!(is_layout_key(key), "expected {key:?} to be a layout key");
+        }
+        for not_key in ["close", "focus", "swap", "tag", "spawn", "mode", "bogus"] {
+            assert!(
+                !is_layout_key(not_key),
+                "expected {not_key:?} not to be a layout key"
+            );
+        }
+    }
+
+    #[test]
+    fn focus_error_message_lists_spatial_dirs() {
+        // The error mentions every direction parser accepts so users
+        // discover the spatial set without reading source.
+        let err = Action::parse(&["focus"]).unwrap_err();
+        for dir in ["next", "prev", "left", "right", "up", "down"] {
+            assert!(err.contains(dir), "{err} missing {dir}");
+        }
+    }
+
+    #[test]
+    fn swap_error_message_lists_spatial_dirs() {
+        let err = Action::parse(&["swap"]).unwrap_err();
+        for dir in ["next", "prev", "left", "right", "up", "down"] {
+            assert!(err.contains(dir), "{err} missing {dir}");
+        }
+    }
+
+    #[test]
+    fn direction_parse_accepts_every_spatial_alias() {
+        // The is_spatial bit is part of the action vocabulary contract —
+        // pin the set so future direction tweaks don't silently regress.
+        assert!(matches!(Direction::parse("left"), Ok(Direction::Left)));
+        assert!(matches!(Direction::parse("h"), Ok(Direction::Left)));
+        assert!(matches!(Direction::parse("right"), Ok(Direction::Right)));
+        assert!(matches!(Direction::parse("l"), Ok(Direction::Right)));
+        assert!(matches!(Direction::parse("up"), Ok(Direction::Up)));
+        assert!(matches!(Direction::parse("k"), Ok(Direction::Up)));
+        assert!(matches!(Direction::parse("down"), Ok(Direction::Down)));
+        assert!(matches!(Direction::parse("j"), Ok(Direction::Down)));
+        assert!(Direction::parse("left").unwrap().is_spatial());
+        assert!(!Direction::parse("next").unwrap().is_spatial());
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Encoding round-trips. Every variant `Action::parse` accepts must
+    // also encode back to the same token list.
+
+    fn parse_tokens(tokens: &[String]) -> Action {
+        let refs: Vec<&str> = tokens.iter().map(String::as_str).collect();
+        Action::parse(&refs).unwrap_or_else(|e| panic!("parse({tokens:?}) failed: {e}"))
+    }
+
+    #[test]
+    fn close_round_trips() {
+        let a = Action::Close;
+        assert_eq!(a.to_tokens(), vec!["close".to_string()]);
+        let back = parse_tokens(&a.to_tokens());
+        assert!(matches!(back, Action::Close));
+    }
+
+    #[test]
+    fn toggle_float_round_trips() {
+        let a = Action::ToggleFloat;
+        assert_eq!(a.to_tokens(), vec!["toggle-float".to_string()]);
+        assert!(matches!(parse_tokens(&a.to_tokens()), Action::ToggleFloat));
+    }
+
+    #[test]
+    fn every_direction_round_trips_through_focus_and_swap() {
+        for dir in [
+            Direction::Next,
+            Direction::Prev,
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ] {
+            let f = Action::focus(dir);
+            let tokens = f.to_tokens();
+            assert_eq!(
+                tokens,
+                vec!["focus".to_string(), dir.as_str().to_string()]
+            );
+            assert!(matches!(parse_tokens(&tokens), Action::FocusDirection(d) if d == dir));
+
+            let s = Action::swap(dir);
+            let tokens = s.to_tokens();
+            assert_eq!(
+                tokens,
+                vec!["swap".to_string(), dir.as_str().to_string()]
+            );
+            assert!(matches!(parse_tokens(&tokens), Action::SwapDirection(d) if d == dir));
+        }
+    }
+
+    #[test]
+    fn spawn_round_trips_with_args() {
+        let a = Action::spawn("rio", ["-e", "nvim", "foo.txt"]);
+        let tokens = a.to_tokens();
+        assert_eq!(
+            tokens,
+            vec![
+                "spawn".to_string(),
+                "rio".into(),
+                "-e".into(),
+                "nvim".into(),
+                "foo.txt".into(),
+            ]
+        );
+        match parse_tokens(&tokens) {
+            Action::Spawn { cmd, args } => {
+                assert_eq!(cmd, "rio");
+                assert_eq!(args, vec!["-e", "nvim", "foo.txt"]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn modes_round_trip() {
+        let enter = Action::enter_mode("resize");
+        assert_eq!(enter.to_tokens(), vec!["mode".to_string(), "resize".into()]);
+        assert!(matches!(parse_tokens(&enter.to_tokens()), Action::EnterMode(s) if s == "resize"));
+
+        let exit = Action::ExitMode;
+        assert_eq!(exit.to_tokens(), vec!["mode".to_string(), "exit".into()]);
+        assert!(matches!(parse_tokens(&exit.to_tokens()), Action::ExitMode));
+    }
+
+    #[test]
+    fn every_tag_variant_round_trips() {
+        for (action, sub) in [
+            (Action::FocusTag(3), "focus"),
+            (Action::ToggleTag(3), "toggle"),
+            (Action::MoveToTag(3), "move"),
+            (Action::ToggleWindowTag(3), "window-toggle"),
+        ] {
+            let tokens = action.to_tokens();
+            assert_eq!(
+                tokens,
+                vec!["tag".to_string(), sub.to_string(), "3".to_string()]
+            );
+            let back = parse_tokens(&tokens);
+            // The variant must come back equivalent.
+            assert_eq!(back.to_tokens(), tokens);
+        }
+    }
+
+    #[test]
+    fn every_layout_constructor_round_trips() {
+        use crate::color::Color;
+        use crate::orientation::Orientation;
+        use crate::value::BoolValue;
+
+        // (Action, expected tokens) — also exercised through parse.
+        let cases: Vec<(Action, Vec<&str>)> = vec![
+            (Action::set_main_ratio(0.55), vec!["main-ratio", "0.5500"]),
+            (Action::adjust_main_ratio(0.05), vec!["main-ratio", "+0.0500"]),
+            (
+                Action::adjust_main_ratio(-0.05),
+                vec!["main-ratio", "-0.0500"],
+            ),
+            (Action::set_main_count(2), vec!["main-count", "2"]),
+            (Action::adjust_main_count(1), vec!["main-count", "+1"]),
+            (Action::adjust_main_count(-1), vec!["main-count", "-1"]),
+            (Action::set_gaps(8), vec!["gaps", "8"]),
+            (Action::adjust_gaps(2), vec!["gaps", "+2"]),
+            (Action::adjust_gaps(-2), vec!["gaps", "-2"]),
+            (Action::set_outer_padding(4), vec!["outer-padding", "4"]),
+            (
+                Action::adjust_outer_padding(-1),
+                vec!["outer-padding", "-1"],
+            ),
+            (
+                Action::set_orientation(Orientation::Left),
+                vec!["orientation", "left"],
+            ),
+            (
+                Action::set_orientation(Orientation::Bottom),
+                vec!["orientation", "bottom"],
+            ),
+            (
+                Action::set_smart_gaps(BoolValue::On),
+                vec!["smart-gaps", "on"],
+            ),
+            (
+                Action::set_smart_gaps(BoolValue::Toggle),
+                vec!["smart-gaps", "toggle"],
+            ),
+            (Action::set_border_width(3), vec!["border-width", "3"]),
+            (
+                Action::set_border_color_focused(Color::rgba(0xC8, 0x32, 0x4B, 0xFF)),
+                vec!["border-color-focused", "0xC8324BFF"],
+            ),
+            (
+                Action::set_border_color_unfocused(Color::rgba(0x00, 0xC8, 0x96, 0xFF)),
+                vec!["border-color-unfocused", "0x00C896FF"],
+            ),
+        ];
+        for (action, expected) in cases {
+            let tokens = action.to_tokens();
+            let actual: Vec<&str> = tokens.iter().map(String::as_str).collect();
+            assert_eq!(actual, expected, "encoding mismatch for {action:?}");
+            // Must parse back as a Layout with matching key + args.
+            let back = parse_tokens(&tokens);
+            assert!(
+                matches!(back, Action::Layout { .. }),
+                "{action:?} did not parse as Layout"
+            );
+            // And re-encoding the parsed version must produce the same
+            // tokens (true round-trip — no precision loss).
+            assert_eq!(back.to_tokens(), tokens);
+        }
+    }
+
+    #[test]
+    fn bind_and_unbind_have_no_token_encoding() {
+        // Bind / Unbind are emitted only by the IPC `bind`/`unbind`
+        // verb handlers; they're not bindable. Their to_tokens() returns
+        // empty so misuse fails loudly at the Client layer instead of
+        // shipping a malformed request.
+        let bind = Action::Bind {
+            spec: BindingSpec {
+                modifiers: 64,
+                keysym: b'q' as u32,
+            },
+            action: Box::new(Action::Close),
+            mode: "default".into(),
+        };
+        assert!(bind.to_tokens().is_empty());
+
+        let unbind = Action::Unbind {
+            spec: BindingSpec {
+                modifiers: 0,
+                keysym: 0xff1b,
+            },
+            mode: "default".into(),
+        };
+        assert!(unbind.to_tokens().is_empty());
     }
 }

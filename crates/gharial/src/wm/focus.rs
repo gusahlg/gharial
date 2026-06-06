@@ -7,15 +7,21 @@
 
 const TAG_COUNT: usize = 32;
 
+/// Per-tag "last focused window" memory. Backed by a stack-resident
+/// fixed-size array: the tag count is a compile-time constant, so a
+/// `[Option<Id>; 32]` is both cheaper than a heap `Vec` and a tighter
+/// contract — no out-of-bounds at runtime, no allocation on construction.
 #[derive(Debug)]
 pub struct FocusMemory<Id> {
-    by_tag: Vec<Option<Id>>,
+    by_tag: [Option<Id>; TAG_COUNT],
 }
 
 impl<Id> Default for FocusMemory<Id> {
     fn default() -> Self {
+        // `[None; 32]` requires Id: Copy. The const-array helper avoids
+        // that requirement; we just need Id: Sized.
         Self {
-            by_tag: std::iter::repeat_with(|| None).take(TAG_COUNT).collect(),
+            by_tag: std::array::from_fn(|_| None),
         }
     }
 }
@@ -154,5 +160,29 @@ mod tests {
         let visible = |_id: &&str| false;
 
         assert_eq!(pick_candidate(remembered, ordered, visible), None);
+    }
+
+    #[test]
+    fn focus_memory_covers_all_32_tags_independently() {
+        // Per-tag isolation: writes on tag N must not bleed into tag M.
+        let mut focus = FocusMemory::default();
+        for n in 1..=32u8 {
+            focus.remember(tag_mask(n), tag_mask(n), &format!("win-{n}"));
+        }
+        for n in 1..=32u8 {
+            assert_eq!(focus.candidates(tag_mask(n)), vec![format!("win-{n}")]);
+        }
+    }
+
+    #[test]
+    fn focus_memory_default_has_no_remembered_focus() {
+        // A brand-new memory must produce no candidates regardless of
+        // the active tag set — guards against accidental garbage in the
+        // fixed-array default initializer.
+        let focus: FocusMemory<&str> = FocusMemory::default();
+        for n in 1..=32u8 {
+            assert!(focus.candidates(tag_mask(n)).is_empty());
+        }
+        assert!(focus.candidates(u32::MAX).is_empty());
     }
 }

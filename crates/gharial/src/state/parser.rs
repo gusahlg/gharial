@@ -151,3 +151,86 @@ fn apply_bool(field: &mut bool, raw: &str) -> Result<(), String> {
     };
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_op_strips_leading_signs() {
+        match parse_op("+0.05") {
+            (Op::Add, rest) => assert_eq!(rest, "0.05"),
+            other => panic!("unexpected: {:?}", other.1),
+        }
+        match parse_op("-3") {
+            (Op::Sub, rest) => assert_eq!(rest, "3"),
+            other => panic!("unexpected: {:?}", other.1),
+        }
+        match parse_op("0.5") {
+            (Op::Set, rest) => assert_eq!(rest, "0.5"),
+            other => panic!("unexpected: {:?}", other.1),
+        }
+    }
+
+    #[test]
+    fn apply_bool_accepts_every_documented_alias() {
+        for alias in ["on", "true", "yes", "1"] {
+            let mut b = false;
+            apply_bool(&mut b, alias).unwrap();
+            assert!(b, "{alias} should set true");
+        }
+        for alias in ["off", "false", "no", "0"] {
+            let mut b = true;
+            apply_bool(&mut b, alias).unwrap();
+            assert!(!b, "{alias} should set false");
+        }
+        let mut b = false;
+        apply_bool(&mut b, "toggle").unwrap();
+        assert!(b);
+        apply_bool(&mut b, "toggle").unwrap();
+        assert!(!b);
+        assert!(apply_bool(&mut b, "maybe").is_err());
+    }
+
+    #[test]
+    fn apply_u32_saturating_sub_floors_at_zero() {
+        let mut v: u32 = 5;
+        apply_u32(&mut v, "-100").unwrap();
+        assert_eq!(v, 0, "underflow must saturate, not wrap");
+    }
+
+    #[test]
+    fn apply_u32_saturating_add_caps_at_max() {
+        let mut v: u32 = u32::MAX - 1;
+        apply_u32(&mut v, "+5").unwrap();
+        assert_eq!(v, u32::MAX, "overflow must saturate");
+    }
+
+    #[test]
+    fn parse_color_accepts_all_three_prefixes() {
+        // 0x..., 0X..., and # are all valid hex prefixes per docs;
+        // pin this so a parser refactor doesn't silently break configs.
+        for raw in ["0xC8324BFF", "0Xc8324bff", "#C8324BFF"] {
+            let _ = parse_color(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
+        }
+    }
+
+    #[test]
+    fn parse_color_rejects_wrong_length() {
+        assert!(parse_color("0xFF").is_err());
+        assert!(parse_color("0xFFFFFFFFFF").is_err());
+        assert!(parse_color("").is_err());
+    }
+
+    #[test]
+    fn parse_color_rejects_non_hex_bytes() {
+        assert!(parse_color("0xZZ334455").is_err());
+        assert!(parse_color("#GG112233").is_err());
+    }
+
+    #[test]
+    fn require_one_reports_the_command_name() {
+        let err = require_one("gaps", &[]).unwrap_err();
+        assert!(err.contains("gaps"));
+    }
+}

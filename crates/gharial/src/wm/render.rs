@@ -19,7 +19,8 @@ use std::collections::HashMap;
 
 use wayland_client::backend::ObjectId;
 
-use crate::layout::{self, Rect};
+use crate::layout::{self, Params, Rect};
+use crate::state::BorderConfig;
 use crate::wayland_proto::window_management::river_window_v1::Edges;
 
 use super::world::World;
@@ -70,15 +71,17 @@ pub fn targets(world: &mut World) -> HashMap<ObjectId, Rect> {
     if let Some(targets) = world.target_cache.snapshot() {
         return targets;
     }
-    let targets = compute_targets(world);
+    let params = world.shared.snapshot();
+    let targets = compute_targets(world, &params);
     world.target_cache.replace(targets.clone());
     targets
 }
 
 /// Compute target slot rectangles (outer, including border) for each
 /// visible tiled window. Hidden (off-tag) and floating windows are
-/// excluded.
-pub fn compute_targets(world: &World) -> HashMap<ObjectId, Rect> {
+/// excluded. Takes the layout `params` so callers can hold the snapshot
+/// stable across surrounding work in the same phase.
+pub fn compute_targets(world: &World, params: &Params) -> HashMap<ObjectId, Rect> {
     let Some(output) = world.outputs.primary() else {
         return HashMap::new();
     };
@@ -91,20 +94,19 @@ pub fn compute_targets(world: &World) -> HashMap<ObjectId, Rect> {
         return HashMap::new();
     }
 
-    let params = world.shared.snapshot();
     // Subtract layer-surface exclusive zones (waybar, panels) from the
     // tiling area when river has reported them. Falls back to the full
     // output rectangle until the first non_exclusive_area event fires.
-    let (origin_x, origin_y, usable_w, usable_h) = output.tiling_area();
-    let rects = layout::compute(tiled.len() as u32, (usable_w, usable_h), &params);
+    let area = output.tiling_area();
+    let rects = layout::compute(tiled.len() as u32, (area.w, area.h), params);
 
     let mut out = HashMap::with_capacity(tiled.len());
-    for (id, rect) in tiled.into_iter().zip(rects.into_iter()) {
+    for (id, rect) in tiled.into_iter().zip(rects) {
         out.insert(
             id,
             Rect {
-                x: rect.x + origin_x,
-                y: rect.y + origin_y,
+                x: rect.x + area.x,
+                y: rect.y + area.y,
                 w: rect.w,
                 h: rect.h,
             },
@@ -132,8 +134,9 @@ fn inset(slot: Rect, border: u32) -> Option<Rect> {
 }
 
 /// Issue manage-bucket requests. Must be called inside a manage sequence.
-pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
-    let border_width = world.shared.borders().width;
+/// `borders` is the snapshot the dispatcher captured for this phase.
+pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>, borders: &BorderConfig) {
+    let border_width = borders.width;
 
     for id in world.windows.ordered_ids() {
         let Some(entry) = world.windows.get_mut(&id) else {
@@ -185,9 +188,8 @@ pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
 /// Order: visibility → borders → position. set_borders fires for
 /// every visible window so colour follows focus changes; positioning
 /// only fires for tiled windows that have confirmed dimensions.
-pub fn flush_render(world: &mut World, targets: &HashMap<ObjectId, Rect>) {
+pub fn flush_render(world: &mut World, targets: &HashMap<ObjectId, Rect>, borders: &BorderConfig) {
     let focused = world.seats.primary().and_then(|s| s.focused.clone());
-    let borders = world.shared.borders();
     let border_edges = if borders.width == 0 {
         Edges::empty()
     } else {

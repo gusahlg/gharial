@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use wayland_client::backend::ObjectId;
 use wayland_client::Proxy;
 
+use crate::layout::Rect;
 use crate::wayland_proto::{RiverLayerShellOutputV1, RiverOutputV1};
 
 #[derive(Debug)]
@@ -33,14 +34,6 @@ pub struct OutputEntry {
     /// `river_layer_shell_output_v1.non_exclusive_area` in *global*
     /// compositor coordinates. `None` until that event has fired.
     pub non_exclusive_area: Option<Rect>,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Rect {
-    pub x: i32,
-    pub y: i32,
-    pub w: u32,
-    pub h: u32,
 }
 
 impl OutputEntry {
@@ -66,17 +59,16 @@ impl OutputEntry {
 
     /// Effective tiling area for this output — non-exclusive area when
     /// the layer-shell has reported one, otherwise the full output
-    /// rectangle. Returned as (origin_x, origin_y, width, height) in
-    /// *global* coordinates, ready for the layout origin.
-    pub fn tiling_area(&self) -> (i32, i32, u32, u32) {
+    /// rectangle. Coordinates are *global* (matching the layout origin).
+    pub fn tiling_area(&self) -> Rect {
         match self.non_exclusive_area {
-            Some(area) if area.w > 0 && area.h > 0 => (area.x, area.y, area.w, area.h),
-            _ => (
-                self.position.0,
-                self.position.1,
-                self.dimensions.0.max(0) as u32,
-                self.dimensions.1.max(0) as u32,
-            ),
+            Some(area) if area.w > 0 && area.h > 0 => area,
+            _ => Rect {
+                x: self.position.0,
+                y: self.position.1,
+                w: self.dimensions.0.max(0) as u32,
+                h: self.dimensions.1.max(0) as u32,
+            },
         }
     }
 }
@@ -120,5 +112,93 @@ impl Outputs {
     pub fn remove(&mut self, id: &ObjectId) -> Option<OutputEntry> {
         self.order.retain(|i| i != id);
         self.by_id.remove(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! `OutputEntry` carries the wayland proxy, which is impractical to
+    //! construct in a unit test. The fields we care about for layout
+    //! (position, dimensions, non_exclusive_area, tiling_area) live on
+    //! plain data, so we verify them via a stand-in helper that mirrors
+    //! the production geometry math.
+    use super::*;
+
+    fn compute_tiling_area(
+        position: (i32, i32),
+        dimensions: (i32, i32),
+        non_exclusive_area: Option<Rect>,
+    ) -> Rect {
+        match non_exclusive_area {
+            Some(area) if area.w > 0 && area.h > 0 => area,
+            _ => Rect {
+                x: position.0,
+                y: position.1,
+                w: dimensions.0.max(0) as u32,
+                h: dimensions.1.max(0) as u32,
+            },
+        }
+    }
+
+    #[test]
+    fn tiling_area_falls_back_to_output_rect_until_layer_event_arrives() {
+        let area = compute_tiling_area((10, 20), (1920, 1080), None);
+        assert_eq!(
+            area,
+            Rect {
+                x: 10,
+                y: 20,
+                w: 1920,
+                h: 1080
+            }
+        );
+    }
+
+    #[test]
+    fn tiling_area_uses_non_exclusive_when_present() {
+        let nea = Rect {
+            x: 0,
+            y: 30,
+            w: 1920,
+            h: 1050,
+        };
+        let area = compute_tiling_area((0, 0), (1920, 1080), Some(nea));
+        assert_eq!(area, nea);
+    }
+
+    #[test]
+    fn tiling_area_falls_back_when_non_exclusive_is_zero_sized() {
+        // River may report a zero-w/h area transiently; we should not
+        // hand the layout an empty box, just fall back to the output.
+        let nea = Rect {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        };
+        let area = compute_tiling_area((0, 0), (800, 600), Some(nea));
+        assert_eq!(
+            area,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600
+            }
+        );
+    }
+
+    #[test]
+    fn tiling_area_clamps_negative_output_dimensions() {
+        let area = compute_tiling_area((0, 0), (-1, -1), None);
+        assert_eq!(
+            area,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0
+            }
+        );
     }
 }

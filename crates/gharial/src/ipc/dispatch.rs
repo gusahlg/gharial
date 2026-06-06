@@ -9,6 +9,7 @@ use std::os::unix::net::UnixStream;
 
 use gharial_ipc::{Request, Response};
 
+use crate::action::is_layout_key;
 use crate::state::Shared;
 
 use super::handlers::{bind, layout, misc, mode, tag, window};
@@ -42,17 +43,13 @@ pub(super) fn handle_client(
 
 fn dispatch(req: Request, shared: &Shared) -> (Response, bool) {
     let args: Vec<&str> = req.args.iter().map(String::as_str).collect();
-    match req.command.as_str() {
-        // Layout params — also accepted from river user_command paths.
-        "main-ratio"
-        | "main-count"
-        | "gaps"
-        | "outer-padding"
-        | "orientation"
-        | "smart-gaps"
-        | "border-width"
-        | "border-color-focused"
-        | "border-color-unfocused" => layout::apply(shared, &req.command, &args),
+    let cmd = req.command.as_str();
+    // Layout-param shorthands route directly to `apply` so users can run
+    // e.g. `gharialctl main-ratio +0.05` without the `set` prefix.
+    if is_layout_key(cmd) {
+        return layout::apply(shared, cmd, &args);
+    }
+    match cmd {
         "set" => layout::set(shared, &args),
         "get" => layout::get(shared, &args),
         "status" => layout::status(shared),

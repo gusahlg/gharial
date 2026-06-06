@@ -137,6 +137,14 @@ impl Shared {
             .clone()
     }
 
+    /// Fetch both `Params` and `BorderConfig` under a single lock — the
+    /// render path needs both per flush and grabbing them together avoids
+    /// a second IPC-vs-renderer contention point.
+    pub fn render_snapshot(&self) -> (Params, BorderConfig) {
+        let inner = self.inner.lock().expect("params mutex poisoned");
+        (inner.params.clone(), inner.borders.clone())
+    }
+
     /// Apply a layout or border command. Sets the dirty flag on any
     /// real change. Border keys (`border-width`, `border-color-focused`,
     /// `border-color-unfocused`) route to the border config; everything

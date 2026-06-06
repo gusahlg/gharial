@@ -1,13 +1,22 @@
 //! gharial: a minimal master-stack layout generator for the river
 //! Wayland compositor.
+//!
+//! The binary entry point lives here; the public Rust API (`Action`,
+//! `Client`, …) lives in the `gharial` library crate alongside this
+//! binary. The wire-format vocabulary is shared, so re-exporting the
+//! lib modules at this crate root keeps daemon-internal call sites
+//! using `crate::action::*` / `crate::keysyms::*` paths unchanged.
 
-mod action;
 mod ipc;
-mod keysyms;
 mod layout;
 mod state;
 mod wayland_proto;
 mod wm;
+
+// Single source of truth: the action vocabulary, keysym table, and
+// value-typed helpers all live in the library. Re-export them so the
+// daemon's internal modules keep their existing `crate::*` paths.
+pub use gharial::{action, color, keysyms, orientation, value};
 
 use std::process::ExitCode;
 
@@ -54,7 +63,6 @@ Options:
 Tuning at runtime:
   gharialctl set main-ratio 0.55
   gharialctl set gaps 8
-  riverctl send-layout-cmd gharial \"main-ratio +0.05\"
 
 IPC socket: $GHARIAL_SOCKET, or $XDG_RUNTIME_DIR/gharial-$WAYLAND_DISPLAY.sock",
         version = env!("CARGO_PKG_VERSION"),

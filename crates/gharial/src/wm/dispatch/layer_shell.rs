@@ -49,7 +49,7 @@ impl Dispatch<RiverLayerShellOutputV1, ()> for World {
                 // panic case in the renderer impossible.
                 let w = width.max(0) as u32;
                 let h = height.max(0) as u32;
-                let area = crate::wm::outputs::Rect { x, y, w, h };
+                let area = crate::layout::Rect { x, y, w, h };
                 let changed = entry.non_exclusive_area != Some(area);
                 entry.non_exclusive_area = Some(area);
                 if changed {

@@ -179,3 +179,96 @@ fn user_config_colors_round_trip() {
     let _ = s.apply("border-color-unfocused", &["0x00C896FF"]).unwrap();
     assert_eq!(s.get("border-color-unfocused").unwrap(), "0x00C896FF");
 }
+
+#[test]
+fn every_layout_key_in_action_module_is_accepted_by_shared_apply() {
+    // Action::LAYOUT_KEYS is the public surface; Shared::apply must
+    // accept every entry so bindings that fire `Action::Layout { key, .. }`
+    // never lose to a "unknown command" reply mid-session.
+    use crate::action::LAYOUT_KEYS;
+    let cases: &[(&str, &str)] = &[
+        ("main-ratio", "0.6"),
+        ("main-count", "2"),
+        ("gaps", "4"),
+        ("outer-padding", "4"),
+        ("orientation", "right"),
+        ("smart-gaps", "off"),
+        ("border-width", "5"),
+        ("border-color-focused", "0xC8324BFF"),
+        ("border-color-unfocused", "0x00C896FF"),
+    ];
+    // Verify cases cover LAYOUT_KEYS in entirety so a new key doesn't
+    // silently slip through.
+    let case_keys: Vec<&str> = cases.iter().map(|(k, _)| *k).collect();
+    let const_keys: Vec<&str> = LAYOUT_KEYS.to_vec();
+    assert_eq!(case_keys, const_keys);
+
+    let s = Shared::new(Params::default());
+    for (key, value) in cases {
+        let _ = s
+            .apply(key, &[value])
+            .unwrap_or_else(|e| panic!("apply({key}, {value}) failed: {e}"));
+        // get should round-trip without erroring on every key too.
+        let _ = s
+            .get(key)
+            .unwrap_or_else(|e| panic!("get({key}) failed: {e}"));
+    }
+}
+
+#[test]
+fn render_snapshot_reflects_current_state() {
+    // The wayland dispatcher captures (params, borders) once per phase;
+    // it must see the most recently applied values, not stale ones.
+    let s = Shared::new(Params::default());
+    let _ = s.apply("gaps", &["12"]).unwrap();
+    let _ = s.apply("border-width", &["5"]).unwrap();
+    let (params, borders) = s.render_snapshot();
+    assert_eq!(params.gaps, 12);
+    assert_eq!(borders.width, 5);
+}
+
+#[test]
+fn render_snapshot_is_atomic_with_respect_to_a_single_apply() {
+    // Both fields come from one lock, so they're consistent with each
+    // other. Repeating the snapshot after a second apply must reflect
+    // both the prior and the new state — never a mix.
+    let s = Shared::new(Params::default());
+    let _ = s.apply("gaps", &["7"]).unwrap();
+    let _ = s.apply("border-width", &["2"]).unwrap();
+    let (p1, b1) = s.render_snapshot();
+    let _ = s.apply("gaps", &["9"]).unwrap();
+    let _ = s.apply("border-width", &["4"]).unwrap();
+    let (p2, b2) = s.render_snapshot();
+    assert_eq!((p1.gaps, b1.width), (7, 2));
+    assert_eq!((p2.gaps, b2.width), (9, 4));
+}
+
+#[test]
+fn apply_unknown_key_does_not_dirty_state() {
+    // Dirty must reflect *real* state change. An error path must leave
+    // dirty alone so the wayland thread doesn't redo a no-op manage.
+    let s = Shared::new(Params::default());
+    s.take_dirty();
+    assert!(s.apply("not-a-real-key", &["whatever"]).is_err());
+    assert!(!s.take_dirty(), "errors must not trip the dirty flag");
+}
+
+#[test]
+fn border_width_no_op_does_not_dirty() {
+    let s = Shared::new(Params::default());
+    let _ = s.apply("border-width", &["3"]).unwrap(); // matches default
+    s.take_dirty();
+    let r = s.apply("border-width", &["3"]).unwrap();
+    assert!(!r.changed);
+    assert!(!s.take_dirty());
+}
+
+#[test]
+fn relative_add_below_zero_saturates_at_zero_for_u32_fields() {
+    let s = Shared::new(Params {
+        gaps: 4,
+        ..Params::default()
+    });
+    let _ = s.apply("gaps", &["-100"]).unwrap();
+    assert_eq!(s.snapshot().gaps, 0);
+}

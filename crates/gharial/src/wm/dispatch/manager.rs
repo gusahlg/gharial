@@ -52,14 +52,18 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
                 drain_pending_focus(state);
                 ensure_focus_invariant(state);
                 let targets = render::targets(state);
-                render::flush_manage(state, &targets);
+                // One lock acquisition for both layout+border snapshots so
+                // an IPC-thread change can't tear values mid-flush.
+                let (_, borders) = state.shared.render_snapshot();
+                render::flush_manage(state, &targets, &borders);
                 proxy.manage_finish();
                 state.sequence.exit_manage();
             }
             iface::Event::RenderStart => {
                 state.sequence.enter_render();
                 let targets = render::targets(state);
-                render::flush_render(state, &targets);
+                let borders = state.shared.borders();
+                render::flush_render(state, &targets, &borders);
                 proxy.render_finish();
                 state.sequence.exit_render();
             }
@@ -67,7 +71,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
                 let entry = entry_for(id, &state.qh, state.tags.active);
                 let window_id = entry.proxy.id();
                 state.windows.insert(entry);
-                state.pending_focus.push(window_id);
+                state.push_pending_focus(window_id);
                 state.mark_layout_dirty();
             }
             iface::Event::Output { id } => {
@@ -136,11 +140,23 @@ fn ensure_layer_shell_default(state: &mut World) {
 /// Promote the most-recently-announced window to keyboard focus on the
 /// primary seat. Discards earlier pending IDs in the same drain so a
 /// burst of opens lands on the visually topmost window.
+///
+/// While a layer surface holds keyboard focus (launcher/panel), defer
+/// the drain — issuing focus_window would cancel that layer focus and
+/// drop the user's keystrokes mid-launch. Pending IDs survive until the
+/// next manage_start that sees the layer surface release focus.
 fn drain_pending_focus(state: &mut World) {
-    let pending = std::mem::take(&mut state.pending_focus);
     let Some(seat_id) = state.seats.primary().map(|s| s.id()) else {
         return;
     };
+    let layer_active = state
+        .seats
+        .get(&seat_id)
+        .is_some_and(|s| s.layer_focus_active);
+    if layer_active {
+        return;
+    }
+    let pending = std::mem::take(&mut state.pending_focus);
     for id in pending.into_iter().rev() {
         if state.windows.is_visible(&id) {
             set_focus(state, &seat_id, &id);

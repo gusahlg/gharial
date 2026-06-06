@@ -92,6 +92,9 @@ pub fn install_binding(
         entry.proxy.enable();
         entry.enabled = true;
     }
+    // Make the mode reachable: register it so a later `mode <name>`
+    // request doesn't get refused as "unknown".
+    world.modes.register(&entry.mode);
     world.bindings.insert(entry);
     Ok(())
 }
