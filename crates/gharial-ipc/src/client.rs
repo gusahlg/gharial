@@ -13,12 +13,11 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use gharial_ipc::{send_one, Request, Response};
-
 use crate::action::Action;
 use crate::color::Color;
 use crate::orientation::Orientation;
 use crate::value::BoolValue;
+use crate::{send_one, Request, Response};
 
 /// Outcome of any [`Client`] method.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -71,10 +70,10 @@ impl From<std::io::Error> for Error {
 /// Handle on a running gharial daemon.
 ///
 /// ```no_run
-/// # fn main() -> gharial::Result<()> {
-/// let g = gharial::Client::new();
+/// # fn main() -> gharial_ipc::Result<()> {
+/// let g = gharial_ipc::Client::new();
 /// g.set_gaps(8)?;
-/// g.bind("Super+Q", gharial::Action::Close)?;
+/// g.bind("Super+Q", gharial_ipc::Action::Close)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -95,7 +94,7 @@ impl Client {
     /// path).
     pub fn new() -> Self {
         Self {
-            socket: gharial_ipc::socket_path(),
+            socket: crate::socket_path(),
         }
     }
 
@@ -392,6 +391,6 @@ mod tests {
     #[test]
     fn default_client_uses_socket_path_resolver() {
         let c = Client::default();
-        assert_eq!(c.socket(), gharial_ipc::socket_path().as_path());
+        assert_eq!(c.socket(), crate::socket_path().as_path());
     }
 }

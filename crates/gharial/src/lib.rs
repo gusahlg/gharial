@@ -54,18 +54,17 @@
 //!   [`Client::set`] and [`Client::raw`] is always available for
 //!   forwards-compatibility.
 
-pub mod action;
-pub mod client;
-pub mod color;
-pub mod keysyms;
-pub mod orientation;
-pub mod value;
+// The control vocabulary (actions, colours, orientation, the keysym
+// table, the typed `Client`) lives in the dependency-light `gharial-ipc`
+// crate so configs can speak it without pulling in the Wayland stack.
+// Re-export the modules here so daemon-internal call sites keep their
+// `crate::action::*` / `crate::keysyms::*` paths and external users of
+// the `gharial` crate see the same surface they always did.
+pub use gharial_ipc::{action, client, color, keysyms, orientation, value};
 
-pub use action::{Action, BindingSpec, Direction};
-pub use client::{Client, Error, Result};
-pub use color::Color;
-pub use orientation::Orientation;
-pub use value::BoolValue;
+pub use gharial_ipc::{
+    Action, BindingSpec, BoolValue, Client, Color, Direction, Error, Orientation, Result,
+};
 
 /// Resolve the default daemon socket path — same precedence as
 /// `gharialctl` and `gharial` itself.

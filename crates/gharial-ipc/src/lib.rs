@@ -1,8 +1,33 @@
-//! IPC protocol shared between the gharial daemon and gharialctl.
+//! IPC protocol and typed control vocabulary shared between the gharial
+//! daemon, `gharialctl`, and Rust-based configs.
 //!
 //! Wire format: a single newline-terminated request line, a single
 //! newline-terminated response line. Tokens are whitespace-separated, with
 //! double-quoted strings supporting `\"` and `\\` escapes.
+//!
+//! On top of the raw wire types this crate owns the *vocabulary* every
+//! client speaks — [`Action`], [`Color`], [`Orientation`], [`BoolValue`],
+//! the keysym table, and the [`Client`] handle. The daemon re-exports
+//! these (so there is exactly one definition of the wire grammar), and
+//! because this crate has no Wayland dependencies a config binary can
+//! depend on it alone and still build in well under a second.
+
+pub mod action;
+pub mod client;
+pub mod color;
+pub mod keysyms;
+pub mod orientation;
+pub mod value;
+
+pub use action::{Action, BindingSpec, Direction};
+pub use client::{Client, Error};
+pub use color::Color;
+pub use orientation::Orientation;
+pub use value::BoolValue;
+
+/// Outcome of a [`Client`] method. Re-exported at the crate root so
+/// `gharial_ipc::Result` reads naturally in a config `main`.
+pub use client::Result;
 
 use std::ffi::OsString;
 use std::fmt;
@@ -72,7 +97,7 @@ impl Request {
     }
 
     /// Parse a line (without trailing newline) into a Request.
-    pub fn parse(line: &str) -> Result<Self, ParseError> {
+    pub fn parse(line: &str) -> std::result::Result<Self, ParseError> {
         let mut tokens = tokenize(line)?;
         if tokens.is_empty() {
             return Err(ParseError::Empty);
@@ -134,7 +159,7 @@ impl Response {
     }
 
     /// Parse a line (without trailing newline) into a Response.
-    pub fn parse(line: &str) -> Result<Self, ParseError> {
+    pub fn parse(line: &str) -> std::result::Result<Self, ParseError> {
         let line = line.trim_end_matches(['\r', '\n']);
         let (tag, rest) = match line.find(' ') {
             Some(i) => (&line[..i], &line[i + 1..]),
@@ -211,7 +236,7 @@ fn push_token(out: &mut String, tok: &str) {
     out.push('"');
 }
 
-fn tokenize(line: &str) -> Result<Vec<String>, ParseError> {
+fn tokenize(line: &str) -> std::result::Result<Vec<String>, ParseError> {
     let mut out = Vec::new();
     let mut chars = line.chars().peekable();
     loop {
