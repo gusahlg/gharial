@@ -23,6 +23,10 @@ pub fn toggle_float(shared: &Shared) -> (Response, bool) {
     queue(shared, Action::ToggleFloat, "toggle-float queued")
 }
 
+pub fn toggle_fullscreen(shared: &Shared) -> (Response, bool) {
+    queue(shared, Action::ToggleFullscreen, "toggle-fullscreen queued")
+}
+
 pub fn focus(shared: &Shared, args: &[&str]) -> (Response, bool) {
     let dir = match args.first() {
         Some(&s) => match Direction::parse(s) {

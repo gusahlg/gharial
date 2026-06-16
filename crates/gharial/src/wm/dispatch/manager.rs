@@ -51,19 +51,19 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
                 }
                 drain_pending_focus(state);
                 ensure_focus_invariant(state);
-                let targets = render::targets(state);
+                render::ensure_targets(state);
                 // One lock acquisition for both layout+border snapshots so
                 // an IPC-thread change can't tear values mid-flush.
                 let (_, borders) = state.shared.render_snapshot();
-                render::flush_manage(state, &targets, &borders);
+                render::flush_manage(state, &borders);
                 proxy.manage_finish();
                 state.sequence.exit_manage();
             }
             iface::Event::RenderStart => {
                 state.sequence.enter_render();
-                let targets = render::targets(state);
+                render::ensure_targets(state);
                 let borders = state.shared.borders();
-                render::flush_render(state, &targets, &borders);
+                render::flush_render(state, &borders);
                 proxy.render_finish();
                 state.sequence.exit_render();
             }

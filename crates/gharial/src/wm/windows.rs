@@ -44,6 +44,15 @@ pub struct WindowEntry {
     /// Floating windows keep their own size and are skipped by the
     /// tiling layout. They still participate in focus and tag visibility.
     pub floating: bool,
+    /// Desired fullscreen state. When set, the window is excluded from
+    /// the tiling layout and river is asked to make it cover its output
+    /// (`river_window_v1.fullscreen`). Reconciled against the server in
+    /// the next manage sequence.
+    pub fullscreen: bool,
+    /// Whether we've issued `fullscreen` to the server for this window
+    /// (and not yet `exit_fullscreen`). Mirrors server-side state so we
+    /// only send the request on a real edge, never on every manage tick.
+    pub fullscreen_on_server: bool,
     /// The (width, focused?) tuple we last sent via set_borders, so we
     /// can avoid redundant wire chatter and re-send only on real change.
     pub borders_signature: Option<(u32, bool)>,
@@ -79,13 +88,6 @@ impl Windows {
         self.by_id.get_mut(id)
     }
 
-    /// Snapshot of the insertion-ordered ID list. Callers that need to
-    /// mutate each entry should pair this with `get_mut` — safer than a
-    /// streaming `&mut` iterator that has to fight aliasing.
-    pub fn ordered_ids(&self) -> Vec<ObjectId> {
-        self.order.clone()
-    }
-
     pub fn visible_ids(&self) -> Vec<ObjectId> {
         self.order
             .iter()
@@ -107,7 +109,16 @@ impl Windows {
     }
 
     pub fn is_visible_tiled(&self, id: &ObjectId) -> bool {
-        self.by_id.get(id).is_some_and(|w| w.visible && !w.floating)
+        self.by_id
+            .get(id)
+            .is_some_and(|w| w.visible && !w.floating && !w.fullscreen)
+    }
+
+    /// Borrow the insertion order and the entry map disjointly so a
+    /// caller can walk windows in order while mutating each entry —
+    /// without cloning the order vector on every manage/render flush.
+    pub fn split_mut(&mut self) -> (&[ObjectId], &mut HashMap<ObjectId, WindowEntry>) {
+        (&self.order, &mut self.by_id)
     }
 
     pub fn index_of(&self, id: &ObjectId) -> Option<usize> {
@@ -156,6 +167,8 @@ pub fn entry_for(proxy: RiverWindowV1, qh: &QueueHandle<World>, tags: u32) -> Wi
         visible: true,
         hidden_on_server: false,
         floating: false,
+        fullscreen: false,
+        fullscreen_on_server: false,
         borders_signature: None,
         csd_disabled: false,
         tiled_edges_sent: None,

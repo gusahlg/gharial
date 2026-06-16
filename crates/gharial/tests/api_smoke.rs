@@ -43,6 +43,7 @@ fn end_user_can_compose_a_full_init_script_in_rust() {
         (chord("H"), Action::focus(Direction::Prev)),
         (chord("Shift+L"), Action::swap(Direction::Next)),
         (chord("Space"), Action::ToggleFloat),
+        (chord("F"), Action::ToggleFullscreen),
         (chord("1"), Action::FocusTag(1)),
         (chord("Shift+1"), Action::MoveToTag(1)),
         (chord("Ctrl+1"), Action::ToggleTag(1)),

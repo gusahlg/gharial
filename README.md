@@ -28,7 +28,7 @@ What 0.2.0 ships:
 - master-stack tiling, per output
 - keyboard bindings via xkb chords, named modes, per-mode enable/disable
 - tags 1..32 with `focus` / `toggle` / `move` / `window-toggle`
-- focus / swap / close / toggle-float / spawn
+- focus / swap / close / toggle-float / toggle-fullscreen / spawn
 - layer shell — waybar, tofi, mako, panels and launchers all work
 - non-exclusive area tracking — tiles stop short of waybar's reserved zone
 - single-colour focus-aware borders, configurable width and colours

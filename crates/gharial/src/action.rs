@@ -22,6 +22,10 @@ pub enum Action {
     /// Toggle the focused window between tiled and floating. Floating
     /// windows keep their own size and are skipped by the tiling layout.
     ToggleFloat,
+    /// Toggle the focused window between fullscreen and its normal
+    /// tiled/floating state. A fullscreen window covers its output and
+    /// is excluded from the tiling layout.
+    ToggleFullscreen,
     /// Adjust a layout parameter (mirrors the gharialctl `set` grammar).
     Layout {
         key: String,
@@ -155,6 +159,7 @@ impl Action {
                 })
             }
             "toggle-float" => Ok(Self::ToggleFloat),
+            "toggle-fullscreen" | "fullscreen" => Ok(Self::ToggleFullscreen),
             "mode" => {
                 let target = rest.first().copied().ok_or("mode: expected <name|exit>")?;
                 if target == "exit" {
@@ -213,6 +218,7 @@ impl Action {
         match self {
             Self::Close => vec!["close".into()],
             Self::ToggleFloat => vec!["toggle-float".into()],
+            Self::ToggleFullscreen => vec!["toggle-fullscreen".into()],
             Self::FocusDirection(dir) => vec!["focus".into(), dir.as_str().into()],
             Self::SwapDirection(dir) => vec!["swap".into(), dir.as_str().into()],
             Self::Spawn { cmd, args } => {
@@ -487,6 +493,31 @@ mod tests {
         assert!(matches!(
             Action::parse(&["toggle-float"]).unwrap(),
             Action::ToggleFloat
+        ));
+    }
+
+    #[test]
+    fn parse_action_toggle_fullscreen() {
+        // Both the canonical token and the `fullscreen` alias resolve to
+        // the same action.
+        assert!(matches!(
+            Action::parse(&["toggle-fullscreen"]).unwrap(),
+            Action::ToggleFullscreen
+        ));
+        assert!(matches!(
+            Action::parse(&["fullscreen"]).unwrap(),
+            Action::ToggleFullscreen
+        ));
+    }
+
+    #[test]
+    fn toggle_fullscreen_round_trips() {
+        let a = Action::ToggleFullscreen;
+        // Encodes to the canonical token, which parses back to itself.
+        assert_eq!(a.to_tokens(), vec!["toggle-fullscreen".to_string()]);
+        assert!(matches!(
+            parse_tokens(&a.to_tokens()),
+            Action::ToggleFullscreen
         ));
     }
 

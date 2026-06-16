@@ -231,6 +231,9 @@ impl Client {
     pub fn toggle_float(&self) -> Result<()> {
         self.execute(Action::ToggleFloat)
     }
+    pub fn toggle_fullscreen(&self) -> Result<()> {
+        self.execute(Action::ToggleFullscreen)
+    }
     pub fn focus(&self, dir: crate::action::Direction) -> Result<()> {
         self.execute(Action::FocusDirection(dir))
     }

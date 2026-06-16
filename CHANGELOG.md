@@ -3,6 +3,26 @@
 All notable changes to gharial. Versions follow semantic versioning;
 0.x means the wire/IPC grammar may still evolve.
 
+## [Unreleased]
+
+### Added
+
+- **Fullscreen**: `toggle-fullscreen` (alias `fullscreen`) makes the
+  focused window cover its output and drops it out of the tiling layout;
+  toggling again restores it. Client-driven fullscreen requests
+  (`fullscreen_requested` / `exit_fullscreen_requested`) are now honoured
+  too, so apps that ask to go fullscreen on their own work. Exposed via
+  gharialctl, the `Client` API (`toggle_fullscreen`), and
+  `Action::ToggleFullscreen`.
+
+### Changed
+
+- **Render hot path**: the manage/render flushes now borrow the layout
+  target cache in place and walk the window set through a disjoint
+  order/entry borrow, eliminating the per-cycle `HashMap` and `Vec`
+  clones. The cache is refreshed once per cycle via `ensure_targets`;
+  only the infrequent spatial focus/swap paths take an owned snapshot.
+
 ## [0.2.0] — first usable WM release
 
 The protocol pivot. v0.1 was a layout daemon for river-classic

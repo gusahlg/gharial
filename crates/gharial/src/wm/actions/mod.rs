@@ -34,6 +34,7 @@ use super::world::World;
 // Re-export the symbols the wayland dispatch layer still pokes at by
 // name. Everything else stays module-private.
 pub(super) use focus::{ensure_focus_invariant, set_focus};
+pub(super) use window::set_window_fullscreen;
 
 pub fn execute(action: Action, world: &mut World) {
     match action {
@@ -42,6 +43,7 @@ pub fn execute(action: Action, world: &mut World) {
         Action::FocusDirection(dir) => focus::focus_direction(world, dir),
         Action::SwapDirection(dir) => window::swap_direction(world, dir),
         Action::ToggleFloat => window::toggle_float(world),
+        Action::ToggleFullscreen => window::toggle_fullscreen(world),
         Action::Layout { key, args } => layout::apply_layout(world, &key, &args),
         Action::EnterMode(name) => mode::enter_mode(world, name),
         Action::ExitMode => mode::enter_mode(world, DEFAULT_MODE.into()),

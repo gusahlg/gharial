@@ -3,12 +3,20 @@
 //! Split into two flush points that mirror the protocol's manage/render
 //! sequence:
 //!
-//!   * [`flush_manage`] runs inside a manage sequence. It sends one-shot
-//!     `use_ssd` to suppress client-side decorations, syncs `set_tiled`
-//!     state, and proposes content dimensions for visible tiled windows.
+//!   * [`flush_manage`] runs inside a manage sequence. It reconciles
+//!     fullscreen state, sends one-shot `use_ssd` to suppress client-side
+//!     decorations, syncs `set_tiled` state, and proposes content
+//!     dimensions for visible tiled windows.
 //!   * [`flush_render`] runs inside a render sequence. It reconciles
 //!     `show`/`hide`, paints focus-aware `set_borders`, and positions
 //!     visible tiled windows.
+//!
+//! Both flush points read their layout target rectangles from
+//! [`TargetCache`], which the dispatcher refreshes once per manage/render
+//! cycle via [`ensure_targets`]. The cache is borrowed in place during a
+//! flush — no per-frame `HashMap` copy — and the per-window walk borrows
+//! the insertion order and the entry map disjointly, so neither hot path
+//! allocates when nothing about the window set has changed.
 //!
 //! Border layout invariant: the layout slot encloses the *full* window
 //! including its border; the content rect is inset by `border_width`
@@ -29,6 +37,11 @@ fn all_edges() -> Edges {
     Edges::Top | Edges::Bottom | Edges::Left | Edges::Right
 }
 
+/// Cache of computed layout target rectangles (outer slot, including
+/// border) for each visible tiled window. Recomputed only when something
+/// invalidates the layout — output geometry, the visible window set, or a
+/// layout-param change — so steady-state manage/render cycles reuse the
+/// last result without recomputing or copying it.
 #[derive(Debug)]
 pub struct TargetCache {
     targets: HashMap<ObjectId, Rect>,
@@ -51,11 +64,18 @@ impl TargetCache {
         self.dirty = true;
     }
 
-    fn snapshot(&self) -> Option<HashMap<ObjectId, Rect>> {
-        (!self.dirty).then(|| self.targets.clone())
+    fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
-    fn replace(&mut self, targets: HashMap<ObjectId, Rect>) {
+    /// Borrow the current targets. Valid only after [`ensure_targets`]
+    /// has run for this cycle; callers in the dispatch layer always
+    /// refresh first.
+    fn targets(&self) -> &HashMap<ObjectId, Rect> {
+        &self.targets
+    }
+
+    fn store(&mut self, targets: HashMap<ObjectId, Rect>) {
         self.targets = targets;
         self.dirty = false;
         self.recompute_count = self.recompute_count.wrapping_add(1);
@@ -67,20 +87,31 @@ impl TargetCache {
     }
 }
 
-pub fn targets(world: &mut World) -> HashMap<ObjectId, Rect> {
-    if let Some(targets) = world.target_cache.snapshot() {
-        return targets;
+/// Refresh the layout target cache if it has been marked dirty. Cheap to
+/// call unconditionally — a clean cache returns immediately. Run once at
+/// the top of each manage/render sequence before flushing.
+pub fn ensure_targets(world: &mut World) {
+    if !world.target_cache.is_dirty() {
+        return;
     }
     let params = world.shared.snapshot();
     let targets = compute_targets(world, &params);
-    world.target_cache.replace(targets.clone());
-    targets
+    world.target_cache.store(targets);
+}
+
+/// Owned snapshot of the current targets, refreshing the cache first.
+/// Used by the infrequent, user-input-driven spatial focus/swap paths
+/// that need to mutate `World` while consulting geometry; the per-frame
+/// flush paths borrow the cache in place instead.
+pub fn targets_snapshot(world: &mut World) -> HashMap<ObjectId, Rect> {
+    ensure_targets(world);
+    world.target_cache.targets().clone()
 }
 
 /// Compute target slot rectangles (outer, including border) for each
-/// visible tiled window. Hidden (off-tag) and floating windows are
-/// excluded. Takes the layout `params` so callers can hold the snapshot
-/// stable across surrounding work in the same phase.
+/// visible tiled window. Hidden (off-tag), floating, and fullscreen
+/// windows are excluded. Takes the layout `params` so callers can hold
+/// the snapshot stable across surrounding work in the same phase.
 pub fn compute_targets(world: &World, params: &Params) -> HashMap<ObjectId, Rect> {
     let Some(output) = world.outputs.primary() else {
         return HashMap::new();
@@ -133,13 +164,26 @@ fn inset(slot: Rect, border: u32) -> Option<Rect> {
     })
 }
 
-/// Issue manage-bucket requests. Must be called inside a manage sequence.
-/// `borders` is the snapshot the dispatcher captured for this phase.
-pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>, borders: &BorderConfig) {
+/// Issue manage-bucket requests. Must be called inside a manage sequence,
+/// after [`ensure_targets`]. `borders` is the snapshot the dispatcher
+/// captured for this phase.
+pub fn flush_manage(world: &mut World, borders: &BorderConfig) {
     let border_width = borders.width;
+    let World {
+        windows,
+        target_cache,
+        outputs,
+        ..
+    } = &mut *world;
+    let targets = target_cache.targets();
+    // The output a window goes fullscreen on. Single-output for now;
+    // per-output assignment is a v0.3 concern. Cloned once so the loop
+    // below can mutate windows without holding an outputs borrow.
+    let fullscreen_output = outputs.primary().map(|o| o.proxy.clone());
+    let (order, by_id) = windows.split_mut();
 
-    for id in world.windows.ordered_ids() {
-        let Some(entry) = world.windows.get_mut(&id) else {
+    for id in order {
+        let Some(entry) = by_id.get_mut(id) else {
             continue;
         };
 
@@ -148,6 +192,33 @@ pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>, border
         if !entry.csd_disabled {
             entry.proxy.use_ssd();
             entry.csd_disabled = true;
+        }
+
+        // Reconcile fullscreen state against the server, only on a real
+        // edge. Entering fullscreen also raises the window to the top of
+        // the render list so it covers the tiled stack underneath it.
+        match (entry.fullscreen, entry.fullscreen_on_server) {
+            (true, false) => {
+                if let Some(output) = fullscreen_output.as_ref() {
+                    entry.proxy.fullscreen(output);
+                    entry.proxy.inform_fullscreen();
+                    entry.node.place_top();
+                    entry.fullscreen_on_server = true;
+                }
+            }
+            (false, true) => {
+                entry.proxy.exit_fullscreen();
+                entry.proxy.inform_not_fullscreen();
+                entry.fullscreen_on_server = false;
+                // Restore normal stacking: floating windows sit on top,
+                // tiled windows at the bottom — matching toggle_float.
+                if entry.floating {
+                    entry.node.place_top();
+                } else {
+                    entry.node.place_bottom();
+                }
+            }
+            _ => {}
         }
 
         // Tell the window whether it lives in a tiled layout. Tiled
@@ -164,11 +235,13 @@ pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>, border
             entry.tiled_edges_sent = Some(want_tiled);
         }
 
-        // Dimensions only proposed for visible tiled windows.
-        if !entry.visible || entry.floating {
+        // Dimensions only proposed for visible tiled windows. A
+        // fullscreen window is sized by the server to its output; our
+        // proposal would be discarded, so skip it.
+        if !entry.visible || entry.floating || entry.fullscreen {
             continue;
         }
-        let Some(slot) = targets.get(&id) else {
+        let Some(slot) = targets.get(id) else {
             continue;
         };
         let Some(content) = inset(*slot, border_width) else {
@@ -183,21 +256,32 @@ pub fn flush_manage(world: &mut World, targets: &HashMap<ObjectId, Rect>, border
 }
 
 /// Issue render-bucket requests. Must be called inside a render or
-/// manage sequence.
+/// manage sequence, after [`ensure_targets`].
 ///
 /// Order: visibility → borders → position. set_borders fires for
-/// every visible window so colour follows focus changes; positioning
-/// only fires for tiled windows that have confirmed dimensions.
-pub fn flush_render(world: &mut World, targets: &HashMap<ObjectId, Rect>, borders: &BorderConfig) {
-    let focused = world.seats.primary().and_then(|s| s.focused.clone());
+/// every visible tiled window so colour follows focus changes;
+/// positioning only fires for tiled windows that have confirmed
+/// dimensions. Fullscreen windows are shown/hidden like any other but
+/// otherwise left to the server (it suppresses their borders and ignores
+/// set_position while fullscreen).
+pub fn flush_render(world: &mut World, borders: &BorderConfig) {
     let border_edges = if borders.width == 0 {
         Edges::empty()
     } else {
         all_edges()
     };
+    let World {
+        windows,
+        target_cache,
+        seats,
+        ..
+    } = &mut *world;
+    let focused = seats.primary().and_then(|s| s.focused.clone());
+    let targets = target_cache.targets();
+    let (order, by_id) = windows.split_mut();
 
-    for id in world.windows.ordered_ids() {
-        let Some(entry) = world.windows.get_mut(&id) else {
+    for id in order {
+        let Some(entry) = by_id.get_mut(id) else {
             continue;
         };
 
@@ -213,7 +297,13 @@ pub fn flush_render(world: &mut World, targets: &HashMap<ObjectId, Rect>, border
             continue;
         }
 
-        let is_focused = focused.as_ref() == Some(&id);
+        // The server owns a fullscreen window's geometry and borders;
+        // leave them alone so we don't fight it or churn the wire.
+        if entry.fullscreen {
+            continue;
+        }
+
+        let is_focused = focused.as_ref() == Some(id);
         let signature = (borders.width, is_focused);
         if entry.borders_signature != Some(signature) {
             let color = if is_focused {
@@ -235,7 +325,7 @@ pub fn flush_render(world: &mut World, targets: &HashMap<ObjectId, Rect>, border
         if entry.actual.is_none() || entry.floating {
             continue;
         }
-        if let Some(slot) = targets.get(&id) {
+        if let Some(slot) = targets.get(id) {
             // Position the content area at the inset origin so the
             // border sits inside the slot, not extending beyond it.
             let inner = inset(*slot, borders.width).unwrap_or(*slot);
@@ -255,22 +345,23 @@ mod tests {
     #[test]
     fn target_cache_starts_dirty_and_reuses_clean_snapshot() {
         let mut cache = TargetCache::default();
-        assert_eq!(cache.snapshot(), None);
+        assert!(cache.is_dirty());
 
-        let targets = HashMap::new();
-        cache.replace(targets);
+        cache.store(HashMap::new());
         assert_eq!(cache.recompute_count(), 1);
-        assert_eq!(cache.snapshot(), Some(HashMap::new()));
+        assert!(!cache.is_dirty());
+        assert_eq!(cache.targets(), &HashMap::new());
+        // A clean cache is not recomputed again.
         assert_eq!(cache.recompute_count(), 1);
     }
 
     #[test]
-    fn marking_target_cache_dirty_forces_next_replace_to_count() {
+    fn marking_target_cache_dirty_forces_next_store_to_count() {
         let mut cache = TargetCache::default();
-        cache.replace(HashMap::new());
+        cache.store(HashMap::new());
         cache.mark_dirty();
-        assert_eq!(cache.snapshot(), None);
-        cache.replace(HashMap::new());
+        assert!(cache.is_dirty());
+        cache.store(HashMap::new());
 
         assert_eq!(cache.recompute_count(), 2);
     }

@@ -47,17 +47,32 @@ impl Dispatch<RiverWindowV1, ()> for World {
                     entry.title = title;
                 }
             }
+            // A client asked to enter or leave fullscreen. Honor it by
+            // flipping the desired state and letting the next manage
+            // sequence reconcile with the server. The output hint is
+            // ignored for now — windows live on the primary output until
+            // per-output assignment lands.
+            iface::Event::FullscreenRequested { .. } => {
+                if let Some(entry) = state.windows.get_mut(&id) {
+                    super::super::actions::set_window_fullscreen(entry, true);
+                    state.mark_layout_dirty();
+                }
+            }
+            iface::Event::ExitFullscreenRequested => {
+                if let Some(entry) = state.windows.get_mut(&id) {
+                    super::super::actions::set_window_fullscreen(entry, false);
+                    state.mark_layout_dirty();
+                }
+            }
             // Events we don't act on yet — unit variants first, then
             // the struct-variant payloads we absorb wholesale.
             iface::Event::MaximizeRequested
             | iface::Event::UnmaximizeRequested
-            | iface::Event::ExitFullscreenRequested
             | iface::Event::MinimizeRequested => {}
             iface::Event::Parent { .. }
             | iface::Event::DecorationHint { .. }
             | iface::Event::PointerMoveRequested { .. }
             | iface::Event::PointerResizeRequested { .. }
-            | iface::Event::FullscreenRequested { .. }
             | iface::Event::ShowWindowMenuRequested { .. }
             | iface::Event::UnreliablePid { .. }
             | iface::Event::PresentationHint { .. }

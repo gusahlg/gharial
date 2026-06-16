@@ -30,6 +30,7 @@ pub fn usage(long: bool) {
     println!("  spawn <cmd> [args...]      Launch a program, detached");
     println!("  close                      Close the focused window");
     println!("  toggle-float               Toggle the focused window's float state");
+    println!("  toggle-fullscreen          Toggle the focused window's fullscreen state");
     println!("  focus <direction>          Shift keyboard focus to a neighbour");
     println!("  swap <direction>           Swap the focused window with the neighbour");
     println!("                             <direction> = next|prev|left|right|up|down");

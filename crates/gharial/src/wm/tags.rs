@@ -33,10 +33,9 @@ pub fn tag_mask(n: u8) -> u32 {
 /// active mask. Called after any tag-mutation action.
 pub fn set_visibility_targets(world: &mut World) {
     let active = world.tags.active;
-    for id in world.windows.ordered_ids() {
-        if let Some(entry) = world.windows.get_mut(&id) {
-            entry.visible = (entry.tags & active) != 0;
-        }
+    let (_, by_id) = world.windows.split_mut();
+    for entry in by_id.values_mut() {
+        entry.visible = (entry.tags & active) != 0;
     }
 }
 

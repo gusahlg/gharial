@@ -48,7 +48,7 @@ fn focus_spatial(world: &mut World, dir: Direction) {
     let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
         return;
     };
-    let targets = render::targets(world);
+    let targets = render::targets_snapshot(world);
     if targets.is_empty() {
         return;
     }

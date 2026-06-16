@@ -73,6 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (chord("Shift+L"), Action::swap(Direction::Next)),
         (chord("Shift+H"), Action::swap(Direction::Prev)),
         (chord("Space"), Action::ToggleFloat),
+        (chord("F"), Action::ToggleFullscreen),
         // Resize mode: enter via Super+R, leave via Escape or Super+R.
         (chord("R"), Action::enter_mode("resize")),
     ];

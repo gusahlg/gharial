@@ -57,6 +57,7 @@ fn dispatch(req: Request, shared: &Shared) -> (Response, bool) {
         // Window-management verbs that route through the action channel.
         "close" => window::close(shared),
         "toggle-float" => window::toggle_float(shared),
+        "toggle-fullscreen" | "fullscreen" => window::toggle_fullscreen(shared),
         "focus" => window::focus(shared, &args),
         "swap" => window::swap(shared, &args),
         "spawn" => window::spawn(shared, &args),
