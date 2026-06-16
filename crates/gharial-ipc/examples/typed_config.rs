@@ -31,7 +31,10 @@ fn main() -> gharial_ipc::Result<()> {
         .bind(chord!("Super+Q"), Action::Close)
         .bind(chord!("Super+Space"), Action::ToggleFloat)
         .bind(chord!("Super+F"), Action::ToggleFullscreen)
-        .bind(chord!("Super+Return"), Action::spawn("rio", [] as [&str; 0]))
+        .bind(
+            chord!("Super+Return"),
+            Action::spawn("rio", [] as [&str; 0]),
+        )
         .bind(chord!("Super+L"), Action::focus(Direction::Next))
         .bind(chord!("Super+H"), Action::focus(Direction::Prev))
         .bind(chord!("Super+Shift+L"), Action::swap(Direction::Next))
@@ -56,7 +59,13 @@ fn main() -> gharial_ipc::Result<()> {
         .layout(layout)
         .bindings(bindings)
         .spawn(["waybar"])
-        .spawn(["swaybg", "-i", "/usr/share/backgrounds/default.png", "-m", "fill"])
+        .spawn([
+            "swaybg",
+            "-i",
+            "/usr/share/backgrounds/default.png",
+            "-m",
+            "fill",
+        ])
         .apply(&g)?;
 
     Ok(())

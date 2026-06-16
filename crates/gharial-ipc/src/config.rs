@@ -479,8 +479,7 @@ mod tests {
             .main_ratio(Ratio::new(0.6))
             .gaps(8)
             .orientation(Orientation::Left);
-        let tokens: Vec<Vec<String>> =
-            layout.actions().iter().map(Action::to_tokens).collect();
+        let tokens: Vec<Vec<String>> = layout.actions().iter().map(Action::to_tokens).collect();
         assert_eq!(tokens[0], vec!["main-ratio".to_string(), "0.6000".into()]);
         assert_eq!(tokens[1], vec!["gaps".to_string(), "8".into()]);
         assert_eq!(tokens[2], vec!["orientation".to_string(), "left".into()]);
