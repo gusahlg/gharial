@@ -189,6 +189,40 @@ wait
 
 See [`config/init`](config/init) for a fully-worked example.
 
+### Configuring in Rust
+
+Prefer a typed config? The `gharial-ipc` crate carries the whole control
+vocabulary — `Action`, `Color`, `Orientation`, the keysym table, and a
+`Client` handle — with **no Wayland dependencies**, so a config binary
+that depends on it alone builds in well under a second. Its `config`
+module adds builders plus three macros that turn the most common
+foot-guns into *compile* errors instead of runtime surprises:
+
+```rust
+use gharial_ipc::config::{Bindings, Layout};
+use gharial_ipc::{chord, ratio, tag, Action, Direction};
+
+let g = gharial_ipc::Client::new();
+Layout::new()
+    .main_ratio(ratio!(0.55)) // ratio!(1.5)        → compile error
+    .gaps(8)
+    .apply(&g)?;
+Bindings::new()
+    .bind(chord!("Super+Q"), Action::Close)        // chord!("Supr+Q")  → compile error
+    .bind(chord!("Super+1"), tag!(1).focus())      // tag!(33)          → compile error
+    .bind(chord!("Super+L"), Action::focus(Direction::Next))
+    .apply(&g)?;
+```
+
+`ratio!` rejects a `main-ratio` outside `0.05..=0.95`, `tag!` rejects a
+tag outside `1..=32`, and `chord!` rejects an unknown modifier/key or an
+empty chord — all at compile time. Everything stays available at the low
+level too: `Action` has a typed constructor for every verb and
+`Client::raw` is the escape hatch. See
+[`crates/gharial-ipc/examples/typed_config.rs`](crates/gharial-ipc/examples/typed_config.rs)
+for a complete config, and [`config/init-rs`](config/init-rs) for a
+Rust binary that also brings up the session.
+
 ## IPC
 
 The daemon listens at `$GHARIAL_SOCKET`, or

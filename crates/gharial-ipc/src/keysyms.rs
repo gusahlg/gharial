@@ -5,66 +5,159 @@
 //! mappings for the ~200 keys a daily-driver config touches and provide a
 //! `0x1234` hex fallback for anything exotic. ASCII letters and digits
 //! resolve from their char codes — no table entries needed.
+//!
+//! The lookups are written as `const fn`s over byte ranges so the same
+//! code that resolves a keysym at runtime can also resolve it during
+//! const evaluation. That is what lets [`crate::config`]'s `chord!`
+//! macro reject an unknown key or modifier at *compile* time.
 
 /// Parse a key name into an xkbcommon keysym. Returns `None` if unknown.
-pub fn parse_keysym(s: &str) -> Option<u32> {
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        return u32::from_str_radix(hex, 16).ok();
+///
+/// `const`: callable from a const context, which the `chord!` macro
+/// relies on to fail compilation for an unknown key.
+pub const fn parse_keysym(s: &str) -> Option<u32> {
+    let b = s.as_bytes();
+    keysym_bytes(b, 0, b.len())
+}
+
+/// Parse a modifier name into its `river_seat_v1::modifiers` bit value.
+/// Returns `None` for an unknown name. `const` for the same reason as
+/// [`parse_keysym`].
+pub const fn modifier_bit(s: &str) -> Option<u32> {
+    let b = s.as_bytes();
+    modifier_bytes(b, 0, b.len())
+}
+
+/// Runtime modifier parse with a human-readable error — the shape the
+/// IPC/CLI grammar wants. Delegates to [`modifier_bit`] so the accepted
+/// set has a single definition.
+pub fn parse_modifier(s: &str) -> Result<u32, String> {
+    modifier_bit(s).ok_or_else(|| format!("unknown modifier: {s}"))
+}
+
+// ── const byte-range core ────────────────────────────────────────────
+//
+// Everything below operates on a `(bytes, start, end)` window so the
+// chord parser can match a segment of a larger string without allocating
+// a sub-`&str` (not possible in a const context).
+
+const fn ascii_lower(b: u8) -> u8 {
+    if b >= b'A' && b <= b'Z' {
+        b + 32
+    } else {
+        b
     }
-    // ASCII letters/digits map to their codepoint.
-    if s.len() == 1 {
-        let c = s.chars().next().unwrap();
-        if c.is_ascii_alphanumeric() {
-            return Some(c.to_ascii_lowercase() as u32);
+}
+
+/// Case-insensitive ASCII comparison of `hay[start..end]` against `needle`.
+const fn range_eq_ic(hay: &[u8], start: usize, end: usize, needle: &[u8]) -> bool {
+    if end - start != needle.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < needle.len() {
+        if ascii_lower(hay[start + i]) != ascii_lower(needle[i]) {
+            return false;
         }
-        // A handful of printable ASCII punctuation that users frequently
-        // bind. xkbcommon's keysyms for these match their ASCII values.
-        if matches!(
-            c,
-            ' ' | '!'
-                | '"'
-                | '#'
-                | '$'
-                | '%'
-                | '&'
-                | '\''
-                | '('
-                | ')'
-                | '*'
-                | '+'
-                | ','
-                | '-'
-                | '.'
-                | '/'
-                | ':'
-                | ';'
-                | '<'
-                | '='
-                | '>'
-                | '?'
-                | '@'
-                | '['
-                | '\\'
-                | ']'
-                | '^'
-                | '_'
-                | '`'
-                | '{'
-                | '|'
-                | '}'
-                | '~'
-        ) {
+        i += 1;
+    }
+    true
+}
+
+/// Resolve `b[start..end]` to a keysym. Handles the `0x…` hex form, a
+/// single printable-ASCII character, and the named table.
+pub(crate) const fn keysym_bytes(b: &[u8], start: usize, end: usize) -> Option<u32> {
+    let len = end - start;
+    if len == 0 {
+        return None;
+    }
+
+    // Hex form: 0x… / 0X…
+    if len >= 2 && b[start] == b'0' && (b[start + 1] == b'x' || b[start + 1] == b'X') {
+        return parse_hex(b, start + 2, end);
+    }
+
+    // Single ASCII char. Printable ASCII keysyms equal their byte value;
+    // letters fold to lowercase (matching xkbcommon's unshifted keysym).
+    if len == 1 {
+        let c = b[start];
+        if c >= b'A' && c <= b'Z' {
+            return Some(ascii_lower(c) as u32);
+        }
+        // Everything else printable (digits, lowercase, punctuation,
+        // space) maps to its own byte value.
+        if c >= 0x20 && c <= 0x7e {
             return Some(c as u32);
         }
     }
-    NAMED.iter().find_map(|(name, sym)| {
-        if name.eq_ignore_ascii_case(s) {
-            Some(*sym)
-        } else {
-            None
+
+    // Named table, case-insensitive.
+    let mut i = 0;
+    while i < NAMED.len() {
+        if range_eq_ic(b, start, end, NAMED[i].0.as_bytes()) {
+            return Some(NAMED[i].1);
         }
-    })
+        i += 1;
+    }
+    None
 }
+
+/// Resolve `b[start..end]` to a modifier bit.
+pub(crate) const fn modifier_bytes(b: &[u8], start: usize, end: usize) -> Option<u32> {
+    let mut i = 0;
+    while i < MODIFIERS.len() {
+        if range_eq_ic(b, start, end, MODIFIERS[i].0.as_bytes()) {
+            return Some(MODIFIERS[i].1);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse `b[start..end]` as a hex integer. `None` on any non-hex digit or
+/// on overflow.
+const fn parse_hex(b: &[u8], start: usize, end: usize) -> Option<u32> {
+    if start >= end {
+        return None;
+    }
+    let mut acc: u32 = 0;
+    let mut i = start;
+    while i < end {
+        let digit = match b[i] {
+            d @ b'0'..=b'9' => (d - b'0') as u32,
+            d @ b'a'..=b'f' => (d - b'a' + 10) as u32,
+            d @ b'A'..=b'F' => (d - b'A' + 10) as u32,
+            _ => return None,
+        };
+        acc = match acc.checked_mul(16) {
+            Some(v) => v,
+            None => return None,
+        };
+        acc = match acc.checked_add(digit) {
+            Some(v) => v,
+            None => return None,
+        };
+        i += 1;
+    }
+    Some(acc)
+}
+
+/// Modifier names → `river_seat_v1::modifiers` bits. Matched case-
+/// insensitively; aliases share a bit.
+const MODIFIERS: &[(&str, u32)] = &[
+    ("shift", 1),
+    ("ctrl", 4),
+    ("control", 4),
+    ("alt", 8),
+    ("mod1", 8),
+    ("mod3", 32),
+    ("super", 64),
+    ("mod4", 64),
+    ("logo", 64),
+    ("win", 64),
+    ("meta", 64),
+    ("mod5", 128),
+];
 
 /// Hand-curated subset of xkbcommon keysyms. Names are matched case-
 /// insensitively. Add to this list rather than reaching for xkbcommon.
@@ -158,19 +251,6 @@ const NAMED: &[(&str, u32)] = &[
     ("xf86launch2", 0x1008ff42),
 ];
 
-/// Parse a modifier name into its `river_seat_v1::modifiers` bit value.
-pub fn parse_modifier(s: &str) -> Result<u32, String> {
-    Ok(match s.to_ascii_lowercase().as_str() {
-        "shift" => 1,
-        "ctrl" | "control" => 4,
-        "alt" | "mod1" => 8,
-        "mod3" => 32,
-        "super" | "mod4" | "logo" | "win" | "meta" => 64,
-        "mod5" => 128,
-        other => return Err(format!("unknown modifier: {other}")),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +317,25 @@ mod tests {
         assert_eq!(parse_keysym(","), Some(b',' as u32));
         assert_eq!(parse_keysym("/"), Some(b'/' as u32));
         assert_eq!(parse_keysym(";"), Some(b';' as u32));
+    }
+
+    #[test]
+    fn parse_keysym_is_const_evaluable() {
+        // The whole point of the const rewrite: a keysym resolves during
+        // const evaluation, so the chord! macro can fail compilation.
+        const RETURN: Option<u32> = parse_keysym("Return");
+        const Q: Option<u32> = parse_keysym("q");
+        const NOPE: Option<u32> = parse_keysym("PaperJam");
+        assert_eq!(RETURN, Some(0xff0d));
+        assert_eq!(Q, Some(0x71));
+        assert_eq!(NOPE, None);
+    }
+
+    #[test]
+    fn modifier_bit_is_const_evaluable() {
+        const SUPER: Option<u32> = modifier_bit("Super");
+        const BOGUS: Option<u32> = modifier_bit("hyper");
+        assert_eq!(SUPER, Some(64));
+        assert_eq!(BOGUS, None);
     }
 }

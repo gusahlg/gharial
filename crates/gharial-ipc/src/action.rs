@@ -124,6 +124,67 @@ impl BindingSpec {
         let keysym = parse_keysym(key).ok_or_else(|| format!("unknown keysym: {key}"))?;
         Ok(Self { modifiers, keysym })
     }
+
+    /// `const` chord parse — the same grammar as [`BindingSpec::parse`],
+    /// usable in a const context. This is what lets the `chord!` macro
+    /// reject a bad chord at compile time. Segments are split on `+`;
+    /// empties are skipped; the last non-empty segment is the key and the
+    /// rest are modifiers.
+    pub const fn parse_const(chord: &str) -> Result<Self, &'static str> {
+        let b = chord.as_bytes();
+        let mut modifiers = 0u32;
+        // The most recent non-empty segment seen so far is a *pending*
+        // key; when another segment follows, it gets promoted to a
+        // modifier and the new one becomes the pending key.
+        let mut have_seg = false;
+        let mut seg_start = 0usize;
+        let mut seg_end = 0usize;
+
+        let mut cursor = 0usize;
+        let mut i = 0usize;
+        loop {
+            let at_end = i == b.len();
+            if at_end || b[i] == b'+' {
+                if i > cursor {
+                    // Non-empty segment [cursor, i).
+                    if have_seg {
+                        match crate::keysyms::modifier_bytes(b, seg_start, seg_end) {
+                            Some(bit) => modifiers |= bit,
+                            None => return Err("unknown modifier in chord"),
+                        }
+                    }
+                    seg_start = cursor;
+                    seg_end = i;
+                    have_seg = true;
+                }
+                if at_end {
+                    break;
+                }
+                cursor = i + 1;
+            }
+            i += 1;
+        }
+
+        if !have_seg {
+            return Err("empty chord");
+        }
+        match crate::keysyms::keysym_bytes(b, seg_start, seg_end) {
+            Some(keysym) => Ok(Self { modifiers, keysym }),
+            None => Err("unknown keysym in chord"),
+        }
+    }
+
+    /// Const chord parse that panics (a *compile* error in a const
+    /// context) on a bad chord. Backs the `chord!` macro.
+    pub const fn const_checked(chord: &str) -> Self {
+        match Self::parse_const(chord) {
+            Ok(spec) => spec,
+            // Const panic messages must be literals, so collapse the
+            // specific reason; the compile error still points at the
+            // offending `chord!(...)` call site.
+            Err(_) => panic!("chord!: invalid chord — unknown modifier, unknown key, or empty"),
+        }
+    }
 }
 
 impl Action {

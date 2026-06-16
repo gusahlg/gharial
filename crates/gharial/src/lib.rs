@@ -42,6 +42,29 @@
 //! }
 //! ```
 //!
+//! # Compile-time-checked config
+//!
+//! For configs that should fail to *compile* rather than misbehave at
+//! runtime, the [`config`] module adds builders and three macros:
+//!
+//! ```no_run
+//! use gharial::config::{Bindings, Layout};
+//! use gharial::{chord, ratio, tag, Action, Client, Direction};
+//!
+//! # fn main() -> gharial::Result<()> {
+//! let g = Client::new();
+//! Layout::new()
+//!     .main_ratio(ratio!(0.55)) // ratio!(1.5) is a compile error
+//!     .gaps(8)
+//!     .apply(&g)?;
+//! Bindings::new()
+//!     .bind(chord!("Super+Q"), Action::Close) // chord!("Supr+Q") won't compile
+//!     .bind(chord!("Super+1"), tag!(1).focus()) // tag!(33) won't compile
+//!     .apply(&g)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Design
 //!
 //! - One handle: `Client`. Cheap to construct (just stores the socket
@@ -49,6 +72,9 @@
 //!   serves one request per connection.
 //! - [`Action`] is the same type the daemon dispatches internally —
 //!   there is no wire-format drift between what you bind and what fires.
+//! - The whole vocabulary lives in the dependency-light `gharial-ipc`
+//!   crate, so a config can depend on it alone and build without the
+//!   Wayland stack. The `gharial` crate re-exports it unchanged.
 //! - Layout-param mutations are typed (`set_gaps(u32)`,
 //!   `set_main_ratio(f32)`, `adjust_main_ratio(f32)`); falling back to
 //!   [`Client::set`] and [`Client::raw`] is always available for
@@ -60,11 +86,16 @@
 // Re-export the modules here so daemon-internal call sites keep their
 // `crate::action::*` / `crate::keysyms::*` paths and external users of
 // the `gharial` crate see the same surface they always did.
-pub use gharial_ipc::{action, client, color, keysyms, orientation, value};
+pub use gharial_ipc::{action, client, color, config, keysyms, orientation, value};
 
 pub use gharial_ipc::{
     Action, BindingSpec, BoolValue, Client, Color, Direction, Error, Orientation, Result,
 };
+
+// The compile-time config macros are `#[macro_export]`ed at the
+// gharial-ipc root; re-export them so `gharial::{chord, ratio, tag}`
+// works for users of the umbrella crate too.
+pub use gharial_ipc::{chord, ratio, tag};
 
 /// Resolve the default daemon socket path — same precedence as
 /// `gharialctl` and `gharial` itself.

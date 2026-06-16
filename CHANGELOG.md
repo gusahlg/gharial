@@ -7,6 +7,19 @@ All notable changes to gharial. Versions follow semantic versioning;
 
 ### Added
 
+- **Compile-time-checked Rust config**: the whole control vocabulary
+  (`Action`, `Color`, `Orientation`, `BoolValue`, the keysym table, and
+  the `Client` handle) now lives in the dependency-light `gharial-ipc`
+  crate, so a config binary can speak it without pulling in the Wayland
+  stack — the `gharial` crate re-exports it unchanged. A new
+  `gharial_ipc::config` module adds `Layout` / `Bindings` / `Config`
+  builders and three macros that turn runtime foot-guns into compile
+  errors: `ratio!` (rejects `main-ratio` outside `0.05..=0.95`), `tag!`
+  (rejects tags outside `1..=32`), and `chord!` (rejects an unknown
+  modifier/key or empty chord). The keysym/modifier lookups and the
+  chord parser are now `const`-evaluable, which is what backs `chord!`.
+  See `crates/gharial-ipc/examples/typed_config.rs`.
+
 - **Fullscreen**: `toggle-fullscreen` (alias `fullscreen`) makes the
   focused window cover its output and drops it out of the tiling layout;
   toggling again restores it. Client-driven fullscreen requests

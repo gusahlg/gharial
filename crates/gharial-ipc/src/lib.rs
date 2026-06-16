@@ -11,10 +11,15 @@
 //! these (so there is exactly one definition of the wire grammar), and
 //! because this crate has no Wayland dependencies a config binary can
 //! depend on it alone and still build in well under a second.
+//!
+//! For writing a configuration in Rust with compile-time-checked values
+//! (out-of-range ratios/tags and malformed chords become compile errors),
+//! see the [`config`] module and the `ratio!` / `tag!` / `chord!` macros.
 
 pub mod action;
 pub mod client;
 pub mod color;
+pub mod config;
 pub mod keysyms;
 pub mod orientation;
 pub mod value;
