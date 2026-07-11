@@ -4,6 +4,7 @@ members = [
     "crates/gharial",
     "crates/gharialctl",
     "crates/gharial-ipc",
+    "config/init-rs",
 ]
 
 [workspace.package]

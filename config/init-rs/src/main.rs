@@ -1,33 +1,22 @@
 //! Rust-based gharial init.
 //!
-//! A behavioural twin of `config/init` (the shell version) written as a
-//! Cargo binary. It does the same four jobs:
-//!
-//!   1. Set the session environment and propagate it to dbus and systemd.
-//!   2. Spawn the `gharial` daemon and wait until its socket answers.
-//!   3. Drive the daemon over IPC to install layout params, bindings, and
-//!      modes — the same calls a shell init makes through `gharialctl`.
-//!   4. Ask the daemon to spawn autostart programs, then block on the
-//!      daemon process so river doesn't tear down the session.
-//!
-//! This is one example of a Rust-shaped config; the only thing gharial
-//! cares about is the IPC requests on the wire, so any language with a
-//! Unix-socket client can play the same role.
+//! This is an executable River init: it starts gharial, waits for its IPC
+//! socket, applies the typed desktop policy, and then waits on the daemon so
+//! River keeps the session alive. Configuration errors tear the daemon down
+//! before the init exits, avoiding an orphaned compositor client.
 
 mod desktop;
-mod ipc;
 
-use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use std::{env, process};
 
-use gharial_ipc::{send_one, socket_path, Request};
+use gharial_ipc::{socket_path, Client};
 
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("gharial-init-rs: {e}");
+    if let Err(error) = run() {
+        eprintln!("gharial-init-rs: {error}");
         process::exit(1);
     }
 }
@@ -36,29 +25,33 @@ fn run() -> Result<(), String> {
     set_session_environment();
     propagate_environment();
 
-    let socket = socket_path();
-    let mut daemon = spawn_daemon()?;
-    wait_for_daemon(&socket, Duration::from_secs(5))?;
+    let client = Client::with_socket(socket_path());
+    let mut daemon = Daemon::spawn()?;
+    wait_for_daemon(&client, Duration::from_secs(5))?;
 
-    desktop::configure(&socket)?;
+    desktop::configure(&client)?;
 
-    // Block on the daemon so river keeps the session alive. When gharial
-    // exits, this binary exits, and river tears the session down.
-    let _ = daemon.wait();
-    Ok(())
+    // River owns the session lifetime. Once gharial exits, let this init exit
+    // too so River can tear the session down normally.
+    daemon
+        .wait()
+        .map(|_| ())
+        .map_err(|error| format!("failed waiting for gharial: {error}"))
 }
 
 fn set_session_environment() {
     env::set_var("XDG_CURRENT_DESKTOP", "river");
     env::set_var("XDG_SESSION_TYPE", "wayland");
-    env::set_var("FONT", desktop::FONT);
 }
 
 fn propagate_environment() {
+    // FONT is intentionally included when supplied by the system config. It
+    // is not hard-coded here because Nix store paths change on rebuild.
     let vars = [
         "WAYLAND_DISPLAY",
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_TYPE",
+        "FONT",
     ];
     let _ = Command::new("dbus-update-activation-environment")
         .arg("--systemd")
@@ -70,26 +63,50 @@ fn propagate_environment() {
         .status();
 }
 
-fn spawn_daemon() -> Result<Child, String> {
-    Command::new("gharial")
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("failed to start gharial: {e}"))
+struct Daemon(Option<Child>);
+
+impl Daemon {
+    fn spawn() -> Result<Self, String> {
+        let daemon = env::var_os("GHARIAL_DAEMON").unwrap_or_else(|| "gharial".into());
+        Command::new(daemon)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map(|child| Self(Some(child)))
+            .map_err(|error| format!("failed to start gharial: {error}"))
+    }
+
+    fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        self.0
+            .take()
+            .expect("daemon child is present until wait")
+            .wait()
+    }
 }
 
-fn wait_for_daemon(socket: &Path, timeout: Duration) -> Result<(), String> {
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let Some(child) = self.0.as_mut() else {
+            return;
+        };
+        // Configuration failure must not leave a daemon running after River
+        // has rejected this init. Ignore races with a child that exited first.
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+fn wait_for_daemon(client: &Client, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
-    let probe = Request::new("ping", Vec::new());
     loop {
-        if let Ok(resp) = send_one(socket, &probe) {
-            if resp.is_ok() {
-                return Ok(());
-            }
+        if client.ping().is_ok() {
+            return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(format!(
                 "daemon at {} did not answer within {:?}",
-                socket.display(),
+                client.socket().display(),
                 timeout
             ));
         }

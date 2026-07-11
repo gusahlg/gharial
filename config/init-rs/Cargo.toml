@@ -11,8 +11,3 @@ path = "src/main.rs"
 
 [dependencies]
 gharial-ipc = { path = "../../crates/gharial-ipc" }
-
-# Detach from the parent gharial workspace so `cargo build` here doesn't
-# drag the daemon and CLI into the build graph, and so `cargo build` at
-# the workspace root doesn't try to claim this package as a member.
-[workspace]

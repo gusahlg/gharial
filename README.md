@@ -151,13 +151,17 @@ install -Dm755 config/init ~/.config/river/init
 
 Then start river as usual. The example `config/init` mirrors a typical
 dwm/river daily-driver. On NixOS, see the example module that ships in
-the repo for a declarative install that places `/etc/river/init`.
+the repo for a declarative install that keeps the River init in
+`/etc/nixos/river/init`.
 
 ## Configuring
 
-Your entire desktop lives in `~/.config/river/init`. It's a plain
-`sh` script, very simple and gives room for a lot of cool stuff.
-After `gharial &`, every line is a `gharialctl` call:
+The portable fallback lives in `~/.config/river/init` as a plain `sh`
+script. For a typed configuration, use the Rust init binary from
+`config/init-rs`; it starts gharial, applies the same policy through the
+compile-time-checked IPC API, and waits on the daemon.
+
+After `gharial &`, every line of the shell fallback is a `gharialctl` call:
 bindings, modes, layout params, autostart programs.
 
 The recommended skeleton:
