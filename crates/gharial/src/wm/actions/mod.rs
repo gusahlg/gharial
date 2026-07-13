@@ -12,6 +12,7 @@
 //! | `focus`    | `FocusDirection`, internal `set_focus`/`ensure_*`  |
 //! | `window`   | `Close`, `ToggleFloat`, `SwapDirection`            |
 //! | `tag`      | `FocusTag` / `ToggleTag` / `MoveToTag` / window-tag |
+//! | `output`   | `FocusOutput` / `SendToOutput` / edge links         |
 //! | `mode`     | `EnterMode` / `ExitMode` / `Bind` / `Unbind`       |
 //! | `layout`   | `Layout { key, args }`                             |
 //! | `spawn`    | `Spawn { cmd, args }`                              |
@@ -22,6 +23,7 @@
 mod focus;
 mod layout;
 mod mode;
+mod output;
 mod spawn;
 mod tag;
 mod window;
@@ -33,7 +35,7 @@ use super::world::World;
 
 // Re-export the symbols the wayland dispatch layer still pokes at by
 // name. Everything else stays module-private.
-pub(super) use focus::{ensure_focus_invariant, set_focus};
+pub(super) use focus::{ensure_focus_invariant, forget_window, set_focus};
 pub(super) use window::set_window_fullscreen;
 
 pub fn execute(action: Action, world: &mut World) {
@@ -53,5 +55,9 @@ pub fn execute(action: Action, world: &mut World) {
         Action::ToggleTag(n) => tag::toggle_tag(world, n),
         Action::MoveToTag(n) => tag::move_to_tag(world, n),
         Action::ToggleWindowTag(n) => tag::toggle_window_tag(world, n),
+        Action::FocusOutput(target) => output::focus_output(world, &target),
+        Action::SendToOutput(target) => output::send_to_output(world, &target),
+        Action::LinkOutputs { a, b } => output::link_outputs(world, a, b),
+        Action::UnlinkOutput(at) => output::unlink_output(world, &at),
     }
 }

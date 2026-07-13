@@ -16,7 +16,7 @@ mod wm;
 // Single source of truth: the action vocabulary, keysym table, and
 // value-typed helpers all live in the library. Re-export them so the
 // daemon's internal modules keep their existing `crate::*` paths.
-pub use gharial::{action, color, keysyms, orientation, value};
+pub use gharial::{action, color, edge, keysyms, orientation, value};
 
 use std::process::ExitCode;
 

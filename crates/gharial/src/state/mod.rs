@@ -30,6 +30,27 @@ use self::parser::apply_command;
 /// the protocol's u32 [0, 0xffffffff] scale.
 pub type BorderColor = [u32; 4];
 
+/// One output as mirrored for the IPC thread (`output list`). Written
+/// by the wayland thread once per manage sequence; never authoritative.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputInfo {
+    /// Connector name (`DP-1`) or, when unknown, the 1-based
+    /// advertisement index as a string.
+    pub name: String,
+    pub position: (i32, i32),
+    pub dimensions: (i32, i32),
+    pub active_tags: u32,
+    pub focused: bool,
+}
+
+/// Output + edge-link mirror for `output list`.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct OutputsInfo {
+    pub outputs: Vec<OutputInfo>,
+    /// Bidirectional links as `(OUTPUT:EDGE, OUTPUT:EDGE)` token pairs.
+    pub links: Vec<(String, String)>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BorderConfig {
     /// Border thickness in pixels. `0` disables borders entirely.
@@ -80,6 +101,10 @@ pub struct Shared {
 struct Inner {
     params: Params,
     borders: BorderConfig,
+    /// Output/link mirror for `output list`. Written by the wayland
+    /// thread, read by IPC; changing it never sets `dirty` (it *is*
+    /// derived from wayland state, not a cause of relayout).
+    outputs: OutputsInfo,
     /// Set when params/borders have changed since the wayland thread
     /// last looked. Consumed by `take_dirty()`.
     dirty: bool,
@@ -100,6 +125,7 @@ impl Shared {
             inner: Arc::new(Mutex::new(Inner {
                 params,
                 borders: BorderConfig::default(),
+                outputs: OutputsInfo::default(),
                 dirty: false,
             })),
             tx: Arc::new(Mutex::new(None)),
@@ -215,6 +241,22 @@ impl Shared {
     pub fn take_dirty(&self) -> bool {
         let mut inner = self.inner.lock().expect("params mutex poisoned");
         std::mem::replace(&mut inner.dirty, false)
+    }
+
+    /// Replace the output mirror. Called by the wayland thread; does
+    /// not touch the dirty flag (the mirror is derived state).
+    pub fn set_outputs_info(&self, info: OutputsInfo) {
+        let mut inner = self.inner.lock().expect("params mutex poisoned");
+        inner.outputs = info;
+    }
+
+    /// Snapshot of the output mirror for `output list`.
+    pub fn outputs_info(&self) -> OutputsInfo {
+        self.inner
+            .lock()
+            .expect("params mutex poisoned")
+            .outputs
+            .clone()
     }
 }
 

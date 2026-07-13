@@ -4,6 +4,7 @@
 //! `wm` (the wayland-side consumer) can name it without depending on
 //! each other's internals.
 
+use crate::edge::{EdgeRef, OutputTarget};
 use crate::keysyms::{parse_keysym, parse_modifier};
 
 #[derive(Clone, Debug)]
@@ -53,6 +54,22 @@ pub enum Action {
     ToggleTag(u8),
     MoveToTag(u8),
     ToggleWindowTag(u8),
+
+    // Outputs (screens)
+    /// Switch the focused output. New windows, tag commands, and
+    /// keyboard focus follow the focused output.
+    FocusOutput(OutputTarget),
+    /// Move the focused window to another output. The window adopts
+    /// the target output's currently visible tags.
+    SendToOutput(OutputTarget),
+    /// Link two output edges so the pointer warps through them when it
+    /// hits either side. Links are bidirectional.
+    LinkOutputs {
+        a: EdgeRef,
+        b: EdgeRef,
+    },
+    /// Remove any pointer link touching the given output edge.
+    UnlinkOutput(EdgeRef),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -230,6 +247,7 @@ impl Action {
                 }
             }
             "tag" => parse_tag_action(rest),
+            "output" => parse_output_action(rest),
             // Anything else is treated as a layout-param command — the
             // same set of keys `gharialctl set` accepts.
             other if is_layout_key(other) => Ok(Self::Layout {
@@ -303,6 +321,18 @@ impl Action {
             Self::ToggleWindowTag(n) => {
                 vec!["tag".into(), "window-toggle".into(), n.to_string()]
             }
+            Self::FocusOutput(target) => {
+                vec!["output".into(), "focus".into(), target.to_token()]
+            }
+            Self::SendToOutput(target) => {
+                vec!["output".into(), "send".into(), target.to_token()]
+            }
+            Self::LinkOutputs { a, b } => {
+                vec!["output".into(), "link".into(), a.to_token(), b.to_token()]
+            }
+            Self::UnlinkOutput(at) => {
+                vec!["output".into(), "unlink".into(), at.to_token()]
+            }
             // Bind/Unbind aren't bindable actions — the Client emits the
             // `bind`/`unbind` IPC verbs directly. Return empty so misuse
             // produces an obviously-broken request rather than silent
@@ -338,6 +368,47 @@ impl Action {
 
     pub fn enter_mode(name: impl Into<String>) -> Self {
         Self::EnterMode(name.into())
+    }
+
+    /// Switch the focused output by direction (`Direction::Next`, a
+    /// cardinal, …).
+    pub fn focus_output(dir: Direction) -> Self {
+        Self::FocusOutput(OutputTarget::Direction(dir))
+    }
+
+    /// Switch the focused output by connector name (`"DP-1"`) or
+    /// 1-based advertisement index (`"2"`).
+    pub fn focus_output_named(name: impl Into<String>) -> Self {
+        Self::FocusOutput(OutputTarget::Named(name.into()))
+    }
+
+    /// Move the focused window to another output by direction.
+    pub fn send_to_output(dir: Direction) -> Self {
+        Self::SendToOutput(OutputTarget::Direction(dir))
+    }
+
+    /// Move the focused window to a named/indexed output.
+    pub fn send_to_output_named(name: impl Into<String>) -> Self {
+        Self::SendToOutput(OutputTarget::Named(name.into()))
+    }
+
+    /// Link two output edges so the pointer warps through them (both
+    /// directions).
+    pub fn link_outputs(
+        a_output: impl Into<String>,
+        a_edge: crate::edge::Edge,
+        b_output: impl Into<String>,
+        b_edge: crate::edge::Edge,
+    ) -> Self {
+        Self::LinkOutputs {
+            a: EdgeRef::new(a_output, a_edge),
+            b: EdgeRef::new(b_output, b_edge),
+        }
+    }
+
+    /// Remove any pointer link touching the given output edge.
+    pub fn unlink_output(output: impl Into<String>, edge: crate::edge::Edge) -> Self {
+        Self::UnlinkOutput(EdgeRef::new(output, edge))
     }
 
     // Layout-param constructors. Each pins the wire form so the daemon
@@ -410,6 +481,45 @@ fn format_delta_f32(delta: f32) -> String {
 
 fn format_delta_i32(delta: i32) -> String {
     format!("{delta:+}")
+}
+
+fn parse_output_action(tokens: &[&str]) -> Result<Action, String> {
+    let (&sub, rest) = tokens
+        .split_first()
+        .ok_or("output: expected focus|send|link|unlink")?;
+    match sub {
+        "focus" => {
+            let target = rest
+                .first()
+                .copied()
+                .ok_or("output focus: expected next|prev|left|right|up|down|NAME")?;
+            Ok(Action::FocusOutput(OutputTarget::parse(target)))
+        }
+        "send" | "move" => {
+            let target = rest
+                .first()
+                .copied()
+                .ok_or("output send: expected next|prev|left|right|up|down|NAME")?;
+            Ok(Action::SendToOutput(OutputTarget::parse(target)))
+        }
+        "link" => match rest {
+            [a, b] => Ok(Action::LinkOutputs {
+                a: EdgeRef::parse(a)?,
+                b: EdgeRef::parse(b)?,
+            }),
+            _ => Err("output link: expected two OUTPUT:EDGE arguments \
+                      (e.g. output link DP-1:right DP-2:left)"
+                .into()),
+        },
+        "unlink" => {
+            let at = rest
+                .first()
+                .copied()
+                .ok_or("output unlink: expected OUTPUT:EDGE")?;
+            Ok(Action::UnlinkOutput(EdgeRef::parse(at)?))
+        }
+        other => Err(format!("output: unknown subcommand {other}")),
+    }
 }
 
 fn parse_tag_action(tokens: &[&str]) -> Result<Action, String> {
@@ -706,18 +816,12 @@ mod tests {
         ] {
             let f = Action::focus(dir);
             let tokens = f.to_tokens();
-            assert_eq!(
-                tokens,
-                vec!["focus".to_string(), dir.as_str().to_string()]
-            );
+            assert_eq!(tokens, vec!["focus".to_string(), dir.as_str().to_string()]);
             assert!(matches!(parse_tokens(&tokens), Action::FocusDirection(d) if d == dir));
 
             let s = Action::swap(dir);
             let tokens = s.to_tokens();
-            assert_eq!(
-                tokens,
-                vec!["swap".to_string(), dir.as_str().to_string()]
-            );
+            assert_eq!(tokens, vec!["swap".to_string(), dir.as_str().to_string()]);
             assert!(matches!(parse_tokens(&tokens), Action::SwapDirection(d) if d == dir));
         }
     }
@@ -784,7 +888,10 @@ mod tests {
         // (Action, expected tokens) — also exercised through parse.
         let cases: Vec<(Action, Vec<&str>)> = vec![
             (Action::set_main_ratio(0.55), vec!["main-ratio", "0.5500"]),
-            (Action::adjust_main_ratio(0.05), vec!["main-ratio", "+0.0500"]),
+            (
+                Action::adjust_main_ratio(0.05),
+                vec!["main-ratio", "+0.0500"],
+            ),
             (
                 Action::adjust_main_ratio(-0.05),
                 vec!["main-ratio", "-0.0500"],
@@ -839,6 +946,65 @@ mod tests {
             // And re-encoding the parsed version must produce the same
             // tokens (true round-trip — no precision loss).
             assert_eq!(back.to_tokens(), tokens);
+        }
+    }
+
+    #[test]
+    fn parse_action_output_focus_and_send() {
+        use crate::edge::OutputTarget;
+        assert!(matches!(
+            Action::parse(&["output", "focus", "next"]).unwrap(),
+            Action::FocusOutput(OutputTarget::Direction(Direction::Next))
+        ));
+        assert!(matches!(
+            Action::parse(&["output", "focus", "DP-2"]).unwrap(),
+            Action::FocusOutput(OutputTarget::Named(name)) if name == "DP-2"
+        ));
+        assert!(matches!(
+            Action::parse(&["output", "send", "right"]).unwrap(),
+            Action::SendToOutput(OutputTarget::Direction(Direction::Right))
+        ));
+        assert!(Action::parse(&["output", "focus"]).is_err());
+        assert!(Action::parse(&["output", "frobnicate", "1"]).is_err());
+    }
+
+    #[test]
+    fn parse_action_output_link_and_unlink() {
+        use crate::edge::Edge;
+        match Action::parse(&["output", "link", "DP-1:right", "DP-2:left"]).unwrap() {
+            Action::LinkOutputs { a, b } => {
+                assert_eq!(a.output, "DP-1");
+                assert_eq!(a.edge, Edge::Right);
+                assert_eq!(b.output, "DP-2");
+                assert_eq!(b.edge, Edge::Left);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(matches!(
+            Action::parse(&["output", "unlink", "DP-1:right"]).unwrap(),
+            Action::UnlinkOutput(at) if at.output == "DP-1"
+        ));
+        assert!(Action::parse(&["output", "link", "DP-1:right"]).is_err());
+        assert!(Action::parse(&["output", "link", "DP-1:up", "DP-2:left"]).is_err());
+        assert!(Action::parse(&["output", "unlink", "DP-1"]).is_err());
+    }
+
+    #[test]
+    fn every_output_variant_round_trips() {
+        use crate::edge::Edge;
+        let cases = vec![
+            Action::focus_output(Direction::Next),
+            Action::focus_output(Direction::Left),
+            Action::focus_output_named("DP-2"),
+            Action::send_to_output(Direction::Prev),
+            Action::send_to_output_named("2"),
+            Action::link_outputs("DP-1", Edge::Right, "DP-2", Edge::Left),
+            Action::unlink_output("DP-1", Edge::Right),
+        ];
+        for action in cases {
+            let tokens = action.to_tokens();
+            let back = parse_tokens(&tokens);
+            assert_eq!(back.to_tokens(), tokens, "round-trip drift for {action:?}");
         }
     }
 

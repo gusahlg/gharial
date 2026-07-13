@@ -185,6 +185,18 @@ const NAMED: &[(&str, u32)] = &[
     ("menu", 0xff67),
     ("print", 0xff61),
     ("pause", 0xff13),
+    // Punctuation by xkb name (the raw chars `,` `.` `;` … also work)
+    ("comma", 0x002c),
+    ("period", 0x002e),
+    ("semicolon", 0x003b),
+    ("apostrophe", 0x0027),
+    ("slash", 0x002f),
+    ("backslash", 0x005c),
+    ("minus", 0x002d),
+    ("equal", 0x003d),
+    ("grave", 0x0060),
+    ("bracketleft", 0x005b),
+    ("bracketright", 0x005d),
     // Arrows
     ("left", 0xff51),
     ("up", 0xff52),
@@ -274,6 +286,17 @@ mod tests {
         assert_eq!(parse_keysym("enter"), Some(0xff0d));
         assert_eq!(parse_keysym("ESCAPE"), Some(0xff1b));
         assert_eq!(parse_keysym("Left"), Some(0xff51));
+    }
+
+    #[test]
+    fn named_punctuation_matches_raw_chars() {
+        // The xkb names and the raw characters must resolve to the
+        // same keysym, so `Super+Period` == `Super+.` in a chord.
+        assert_eq!(parse_keysym("Period"), parse_keysym("."));
+        assert_eq!(parse_keysym("comma"), parse_keysym(","));
+        assert_eq!(parse_keysym("semicolon"), parse_keysym(";"));
+        assert_eq!(parse_keysym("minus"), parse_keysym("-"));
+        assert_eq!(parse_keysym("bracketleft"), parse_keysym("["));
     }
 
     #[test]

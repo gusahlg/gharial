@@ -31,10 +31,7 @@ pub enum Error {
     /// The daemon answered with `err <message>`. Returned verbatim.
     Daemon(String),
     /// `wait_until_ready` ran out of time before the daemon answered.
-    Timeout {
-        socket: PathBuf,
-        waited: Duration,
-    },
+    Timeout { socket: PathBuf, waited: Duration },
 }
 
 impl fmt::Display for Error {
@@ -268,6 +265,50 @@ impl Client {
         self.execute(Action::ToggleWindowTag(n))
     }
 
+    // ── Outputs (screens) ────────────────────────────────────────────
+
+    /// Switch the focused output by direction.
+    pub fn focus_output(&self, dir: crate::action::Direction) -> Result<()> {
+        self.execute(Action::focus_output(dir))
+    }
+
+    /// Switch the focused output by connector name or 1-based index.
+    pub fn focus_output_named(&self, name: &str) -> Result<()> {
+        self.execute(Action::focus_output_named(name))
+    }
+
+    /// Move the focused window to another output by direction.
+    pub fn send_to_output(&self, dir: crate::action::Direction) -> Result<()> {
+        self.execute(Action::send_to_output(dir))
+    }
+
+    /// Move the focused window to a named/indexed output.
+    pub fn send_to_output_named(&self, name: &str) -> Result<()> {
+        self.execute(Action::send_to_output_named(name))
+    }
+
+    /// Link two output edges so the pointer warps through them.
+    pub fn link_outputs(
+        &self,
+        a_output: &str,
+        a_edge: crate::edge::Edge,
+        b_output: &str,
+        b_edge: crate::edge::Edge,
+    ) -> Result<()> {
+        self.execute(Action::link_outputs(a_output, a_edge, b_output, b_edge))
+    }
+
+    /// Remove any pointer link touching the given output edge.
+    pub fn unlink_output(&self, output: &str, edge: crate::edge::Edge) -> Result<()> {
+        self.execute(Action::unlink_output(output, edge))
+    }
+
+    /// One-line description of every output the daemon knows about
+    /// (name, geometry, active tags, focused marker, edge links).
+    pub fn list_outputs(&self) -> Result<String> {
+        self.send_expect_ok("output", &["list"])
+    }
+
     // ── Bindings & modes ─────────────────────────────────────────────
 
     /// Install a binding under the default mode.
@@ -354,10 +395,7 @@ impl Client {
     }
 
     fn send_expect_ok(&self, command: &str, args: &[&str]) -> Result<String> {
-        let req = Request::new(
-            command,
-            args.iter().map(|s| (*s).to_string()).collect(),
-        );
+        let req = Request::new(command, args.iter().map(|s| (*s).to_string()).collect());
         match send_one(&self.socket, &req)? {
             Response::Ok(body) => Ok(body),
             Response::Err(msg) => Err(Error::Daemon(msg)),

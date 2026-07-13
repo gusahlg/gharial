@@ -2,7 +2,7 @@
 //! loop; never wrapped in an Arc/Mutex. Subsystems (windows, outputs,
 //! seats, bindings, modes, tags) live as fields here.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use wayland_client::backend::ObjectId;
 use wayland_client::QueueHandle;
@@ -11,14 +11,13 @@ use crate::action::Action;
 use crate::state::Shared;
 
 use super::bindings::Bindings;
-use super::focus::FocusMemory;
 use super::globals::Globals;
+use super::links::EdgeLinks;
 use super::modes::Modes;
 use super::outputs::Outputs;
 use super::render::TargetCache;
 use super::seats::Seats;
 use super::sequence::Sequence;
-use super::tags::Tags;
 use super::windows::Windows;
 
 /// Upper bound on the `pending_focus` queue. A normal session adds 0..3
@@ -38,8 +37,14 @@ pub struct World {
     pub seats: Seats,
     pub bindings: Bindings,
     pub modes: Modes,
-    pub tags: Tags,
-    pub focus: FocusMemory<ObjectId>,
+    /// Pointer edge links between outputs (the "portal" config).
+    pub links: EdgeLinks,
+    /// `wl_output` globals the registry has advertised, keyed by global
+    /// name → version. Seeded from the initial global list and kept
+    /// current by the registry dispatch; consulted when a river output
+    /// tells us its wl_output global name so we can bind it and learn
+    /// the connector name.
+    pub wl_output_globals: HashMap<u32, u32>,
     pub target_cache: TargetCache,
     /// Actions sent from the IPC thread that need to be applied during
     /// the next manage sequence. Drained at the top of `manage_start`.
@@ -64,8 +69,8 @@ impl World {
             seats: Seats::default(),
             bindings: Bindings::default(),
             modes: Modes::default(),
-            tags: Tags::default(),
-            focus: FocusMemory::default(),
+            links: EdgeLinks::default(),
+            wl_output_globals: HashMap::new(),
             target_cache: TargetCache::default(),
             pending_actions: VecDeque::new(),
             pending_focus: Vec::new(),
@@ -123,7 +128,10 @@ mod tests {
         }
         assert_eq!(buf.len(), super::PENDING_FOCUS_CAP);
         // The newest IDs survive; the oldest are evicted first.
-        assert_eq!(*buf.last().unwrap(), super::PENDING_FOCUS_CAP as u32 * 2 - 1);
+        assert_eq!(
+            *buf.last().unwrap(),
+            super::PENDING_FOCUS_CAP as u32 * 2 - 1
+        );
         assert_eq!(*buf.first().unwrap(), super::PENDING_FOCUS_CAP as u32);
     }
 

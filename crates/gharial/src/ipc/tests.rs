@@ -83,7 +83,11 @@ fn shorthand_layout_key_routes_to_apply() {
     let shared = Shared::new(Params::default());
     let _server = Server::start_at(path.clone(), shared, None).unwrap();
 
-    let r1 = send_one(&path, &Request::new("set", vec!["gaps".into(), "11".into()])).unwrap();
+    let r1 = send_one(
+        &path,
+        &Request::new("set", vec!["gaps".into(), "11".into()]),
+    )
+    .unwrap();
     assert!(r1.is_ok());
     let r2 = send_one(&path, &Request::new("gaps", vec!["+1".into()])).unwrap();
     assert!(r2.is_ok());
@@ -262,6 +266,79 @@ fn client_tag_methods_route_to_tag_verb() {
 }
 
 #[test]
+fn client_output_methods_route_to_output_verb() {
+    let (client, _server, _shared) = spawn_server("client-output");
+    // No wayland thread = daemon error from the action channel, but
+    // every method must survive parsing and reach the dispatcher.
+    for r in [
+        client.focus_output(Direction::Next),
+        client.focus_output_named("DP-2"),
+        client.send_to_output(Direction::Right),
+        client.link_outputs("DP-1", gharial::Edge::Left, "DP-2", gharial::Edge::Right),
+        client.unlink_output("DP-1", gharial::Edge::Left),
+    ] {
+        let err = r.unwrap_err();
+        assert!(matches!(err, gharial::Error::Daemon(msg) if msg.contains("wayland")));
+    }
+}
+
+#[test]
+fn output_list_answers_without_a_wayland_thread() {
+    // The mirror starts empty; the verb must still answer ok.
+    let (client, _server, _shared) = spawn_server("output-list");
+    assert_eq!(client.list_outputs().unwrap(), "no outputs");
+}
+
+#[test]
+fn output_list_reflects_the_shared_mirror() {
+    use crate::state::{OutputInfo, OutputsInfo};
+    let (client, _server, shared) = spawn_server("output-mirror");
+    shared.set_outputs_info(OutputsInfo {
+        outputs: vec![
+            OutputInfo {
+                name: "DP-1".into(),
+                position: (0, 0),
+                dimensions: (1920, 1080),
+                active_tags: 0x1,
+                focused: true,
+            },
+            OutputInfo {
+                name: "DP-2".into(),
+                position: (1920, 0),
+                dimensions: (2560, 1440),
+                active_tags: 0x2,
+                focused: false,
+            },
+        ],
+        links: vec![("DP-1:left".into(), "DP-2:right".into())],
+    });
+    let listed = client.list_outputs().unwrap();
+    assert!(listed.contains("DP-1 1920x1080+0+0 tags=0x00000001 focused"));
+    assert!(listed.contains("DP-2 2560x1440+1920+0 tags=0x00000002"));
+    assert!(listed.contains("link DP-1:left<->DP-2:right"));
+}
+
+#[test]
+fn output_verb_rejects_malformed_arguments() {
+    let (client, _server, _shared) = spawn_server("output-bad");
+    let path = client.socket().to_path_buf();
+    for args in [
+        vec![],
+        vec!["focus".to_string()],
+        vec!["link".to_string(), "DP-1:right".to_string()],
+        vec![
+            "link".to_string(),
+            "DP-1:diagonal".to_string(),
+            "DP-2:left".to_string(),
+        ],
+        vec!["unlink".to_string(), "DP-1".to_string()],
+    ] {
+        let resp = send_one(&path, &Request::new("output", args.clone())).unwrap();
+        assert!(!resp.is_ok(), "expected error for output {args:?}");
+    }
+}
+
+#[test]
 fn client_spawn_routes_to_spawn_verb_with_correct_args() {
     let (client, _server, _shared) = spawn_server("client-spawn");
     let err = client.spawn("rio", &["-e", "nvim"]).unwrap_err();
@@ -292,9 +369,7 @@ fn client_bind_packages_chord_and_action_tokens() {
 #[test]
 fn client_bind_rejects_a_bad_chord_without_routing_to_action_channel() {
     let (client, _server, _shared) = spawn_server("client-bind-bad-chord");
-    let err = client
-        .bind("Hyper+NotARealKey", Action::Close)
-        .unwrap_err();
+    let err = client.bind("Hyper+NotARealKey", Action::Close).unwrap_err();
     match err {
         gharial::Error::Daemon(msg) => {
             assert!(msg.contains("modifier") || msg.contains("keysym") || msg.contains("Hyper"));
@@ -368,7 +443,9 @@ fn client_execute_rejects_bind_unbind_actions_client_side() {
         mode: "default".into(),
     };
     let err = client.execute(bind).unwrap_err();
-    assert!(matches!(err, gharial::Error::Daemon(msg) if msg.contains("Bind/Unbind") || msg.contains("no tokens")));
+    assert!(
+        matches!(err, gharial::Error::Daemon(msg) if msg.contains("Bind/Unbind") || msg.contains("no tokens"))
+    );
 }
 
 #[test]

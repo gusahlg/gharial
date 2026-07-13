@@ -3,6 +3,11 @@
 //! Public to the parent module: `set_focus`, `clear_focus`, and
 //! `ensure_focus_invariant` — the wayland dispatch layer reaches into
 //! these. The rest is implementation detail.
+//!
+//! Focus and outputs are kept coherent from one place: `set_focus`
+//! records the window in its output's focus memory *and* moves output
+//! focus to that output, so keyboard focus and the focused screen never
+//! disagree.
 
 use wayland_client::backend::ObjectId;
 
@@ -21,8 +26,14 @@ pub(in crate::wm) fn focus_direction(world: &mut World, dir: Direction) {
     }
 }
 
+/// Cycle focus through the stack order of the *focused output* — each
+/// screen cycles its own windows, exactly like the single-screen
+/// behaviour did.
 pub(in crate::wm) fn focus_stack(world: &mut World, dir: Direction) {
-    let visible = world.windows.visible_ids();
+    let visible = match world.outputs.focused_id() {
+        Some(output) => world.windows.visible_ids_on(&output),
+        None => world.windows.visible_ids(),
+    };
     if visible.is_empty() {
         return;
     }
@@ -44,6 +55,9 @@ pub(in crate::wm) fn focus_stack(world: &mut World, dir: Direction) {
     set_focus(world, &seat_id, &visible[new_idx]);
 }
 
+/// Spatial focus works over *all* outputs' layout rects — walking focus
+/// off the right edge of one screen lands on the nearest window of the
+/// next screen, and output focus follows.
 fn focus_spatial(world: &mut World, dir: Direction) {
     let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
         return;
@@ -87,14 +101,22 @@ pub(in crate::wm) fn set_focus(world: &mut World, seat_id: &ObjectId, window_id:
         return;
     }
     let window_tags = window.tags;
+    let window_output = window.output.clone();
     let Some(seat) = world.seats.get_mut(seat_id) else {
         return;
     };
     seat.proxy.focus_window(&window.proxy);
     seat.focused = Some(window_id.clone());
-    world
-        .focus
-        .remember(world.tags.active, window_tags, window_id);
+    // Keyboard focus defines the focused screen: remember the window in
+    // its output's per-tag memory and move output focus there.
+    if let Some(output_id) = window_output {
+        world.outputs.set_focused(&output_id);
+        if let Some(output) = world.outputs.get_mut(&output_id) {
+            output
+                .focus
+                .remember(output.active_tags, window_tags, window_id);
+        }
+    }
 }
 
 pub(in crate::wm) fn clear_focus(world: &mut World, seat_id: &ObjectId) {
@@ -105,10 +127,10 @@ pub(in crate::wm) fn clear_focus(world: &mut World, seat_id: &ObjectId) {
 }
 
 /// "Always something focused" invariant — if the seat's focused window
-/// has been closed or hidden, restore the active tag's remembered focus
-/// or fall back to the first visible window. Clear focus only when
-/// literally no visible windows exist. Called at the tail of every
-/// `manage_start` drain.
+/// has been closed or hidden, restore the focused output's remembered
+/// focus or fall back to the first visible window there. Clear focus
+/// only when the focused output has no visible windows. Called at the
+/// tail of every `manage_start` drain.
 pub(in crate::wm) fn ensure_focus_invariant(world: &mut World) {
     let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
         return;
@@ -139,8 +161,24 @@ pub(in crate::wm) fn ensure_focus_invariant(world: &mut World) {
     }
 }
 
+/// Best focus candidate on the focused output: its per-tag remembered
+/// focus first, then the first visible window in stack order.
 pub(in crate::wm) fn focus_candidate(world: &World) -> Option<ObjectId> {
-    let remembered = world.focus.candidates(world.tags.active);
-    let ordered = world.windows.visible_ids();
+    let Some(output) = world.outputs.focused() else {
+        // No outputs — fall back to any visible window.
+        return world.windows.visible_ids().into_iter().next();
+    };
+    let remembered = output.focus.candidates(output.active_tags);
+    let ordered = world.windows.visible_ids_on(&output.id());
     pick_candidate(remembered, ordered, |id| world.windows.is_visible(id))
+}
+
+/// Forget a removed window in every output's focus memory.
+pub(in crate::wm) fn forget_window(world: &mut World, window_id: &ObjectId) {
+    let ids: Vec<ObjectId> = world.outputs.iter_ids().collect();
+    for id in ids {
+        if let Some(output) = world.outputs.get_mut(&id) {
+            output.focus.forget(window_id);
+        }
+    }
 }

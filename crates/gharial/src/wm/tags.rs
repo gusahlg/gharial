@@ -1,41 +1,51 @@
-//! Tag bitmask tracking. Tags 1..32 map to bits 0..31.
+//! Tag bitmask helpers. Tags 1..32 map to bits 0..31.
 //!
-//! v0.2 keeps a single global active mask shared across all outputs.
-//! Per-output tag sets are an obvious v0.3 extension; the data model
-//! here doesn't preclude it.
+//! Since v0.3 every output owns its own active mask (see
+//! [`super::outputs::OutputEntry::active_tags`]) — each screen is an
+//! independent view into the tag space. The helpers here recompute
+//! window visibility from those per-output masks.
+
+use std::collections::HashMap;
+
+use wayland_client::backend::ObjectId;
 
 use super::world::World;
-
-#[derive(Debug)]
-pub struct Tags {
-    /// Bitmask of currently-visible tags.
-    pub active: u32,
-}
-
-impl Default for Tags {
-    fn default() -> Self {
-        Self { active: 1 }
-    }
-}
 
 /// `1 << (n - 1)` with `n` already validated to 1..=32 by the caller.
 /// The debug-assert catches drift in the upstream parsers that promise
 /// the 1..=32 range; release builds trust the contract.
 pub fn tag_mask(n: u8) -> u32 {
-    debug_assert!(
-        (1..=32).contains(&n),
-        "tag_mask: n must be 1..=32, got {n}"
-    );
+    debug_assert!((1..=32).contains(&n), "tag_mask: n must be 1..=32, got {n}");
     1u32 << (n - 1)
 }
 
-/// Recompute every window's `visible` flag from its tag mask vs the
-/// active mask. Called after any tag-mutation action.
+/// Recompute every window's `visible` flag from its tag mask vs its
+/// output's active mask. Windows whose output has disappeared (or was
+/// never set) are re-homed to the focused output first. Called after
+/// any tag- or output-mutation action and at the top of every manage
+/// sequence.
 pub fn set_visibility_targets(world: &mut World) {
-    let active = world.tags.active;
+    let masks: HashMap<ObjectId, u32> = world
+        .outputs
+        .iter()
+        .map(|o| (o.id(), o.active_tags))
+        .collect();
+    let fallback = world.outputs.focused_id();
     let (_, by_id) = world.windows.split_mut();
     for entry in by_id.values_mut() {
-        entry.visible = (entry.tags & active) != 0;
+        let valid = entry
+            .output
+            .as_ref()
+            .is_some_and(|id| masks.contains_key(id));
+        if !valid {
+            entry.output = fallback.clone();
+        }
+        entry.visible = match entry.output.as_ref().and_then(|id| masks.get(id)) {
+            Some(active) => (entry.tags & active) != 0,
+            // No outputs at all — keep windows nominally visible so the
+            // first output to appear shows them immediately.
+            None => true,
+        };
     }
 }
 
@@ -49,11 +59,6 @@ mod tests {
         assert_eq!(tag_mask(2), 0x0000_0002);
         assert_eq!(tag_mask(9), 0x0000_0100);
         assert_eq!(tag_mask(32), 0x8000_0000);
-    }
-
-    #[test]
-    fn default_tags_show_tag_one() {
-        assert_eq!(Tags::default().active, 0x1);
     }
 
     #[test]

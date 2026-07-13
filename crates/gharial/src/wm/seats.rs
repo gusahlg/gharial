@@ -25,6 +25,13 @@ pub struct SeatEntry {
     /// or non-exclusive). While set, gharial leaves seat focus alone
     /// so launchers like tofi can actually receive input.
     pub layer_focus_active: bool,
+    /// Last pointer position reported via `pointer_position`, in the
+    /// compositor's global logical coordinates. Drives edge-link warps.
+    pub last_pointer: Option<(i32, i32)>,
+    /// Set when a fresh `pointer_position` arrived since the last
+    /// manage sequence — the edge-link poll loop only keeps requesting
+    /// manage sequences while the pointer is actually moving.
+    pub pointer_moved: bool,
 }
 
 impl SeatEntry {
@@ -36,6 +43,8 @@ impl SeatEntry {
             pointer_over: None,
             layer_shell: None,
             layer_focus_active: false,
+            last_pointer: None,
+            pointer_moved: false,
         }
     }
 

@@ -34,6 +34,11 @@ pub struct WindowEntry {
     pub position: Option<(i32, i32)>,
     /// Tag bitmask this window belongs to.
     pub tags: u32,
+    /// The output this window lives on. Windows are created on the
+    /// focused output; `output send` moves them. `None` (or a removed
+    /// output's id) is healed to the focused output by the visibility
+    /// pass at the top of every manage sequence.
+    pub output: Option<ObjectId>,
     /// Whether the window is currently on a visible tag. Recomputed
     /// after any tag-state change; flushed to the server via show/hide
     /// during the next render sequence.
@@ -96,12 +101,30 @@ impl Windows {
             .collect()
     }
 
-    pub fn visible_tiled_ids(&self) -> Vec<ObjectId> {
+    /// Visible windows on a specific output, in stack order.
+    pub fn visible_ids_on(&self, output: &ObjectId) -> Vec<ObjectId> {
         self.order
             .iter()
-            .filter(|id| self.is_visible_tiled(id))
+            .filter(|id| self.is_visible(id) && self.is_on_output(id, output))
             .cloned()
             .collect()
+    }
+
+    /// Visible tiled windows on a specific output, in stack order —
+    /// the per-output layout input. (The all-outputs variant went away
+    /// with multi-output support: the layout is always per screen.)
+    pub fn visible_tiled_ids_on(&self, output: &ObjectId) -> Vec<ObjectId> {
+        self.order
+            .iter()
+            .filter(|id| self.is_visible_tiled(id) && self.is_on_output(id, output))
+            .cloned()
+            .collect()
+    }
+
+    pub fn is_on_output(&self, id: &ObjectId, output: &ObjectId) -> bool {
+        self.by_id
+            .get(id)
+            .is_some_and(|w| w.output.as_ref() == Some(output))
     }
 
     pub fn is_visible(&self, id: &ObjectId) -> bool {
@@ -151,9 +174,14 @@ impl Windows {
 
 /// Construct a fresh entry for a window the manager just announced.
 /// `get_node` is not sequence-restricted, so we can call it here in any
-/// phase. New windows are placed on the currently-active tags so they
-/// appear in front of the user immediately.
-pub fn entry_for(proxy: RiverWindowV1, qh: &QueueHandle<World>, tags: u32) -> WindowEntry {
+/// phase. New windows are placed on the focused output's active tags so
+/// they appear in front of the user immediately.
+pub fn entry_for(
+    proxy: RiverWindowV1,
+    qh: &QueueHandle<World>,
+    tags: u32,
+    output: Option<ObjectId>,
+) -> WindowEntry {
     let node = proxy.get_node(qh, ());
     WindowEntry {
         proxy,
@@ -164,6 +192,7 @@ pub fn entry_for(proxy: RiverWindowV1, qh: &QueueHandle<World>, tags: u32) -> Wi
         actual: None,
         position: None,
         tags,
+        output,
         visible: true,
         hidden_on_server: false,
         floating: false,

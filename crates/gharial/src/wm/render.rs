@@ -109,39 +109,41 @@ pub fn targets_snapshot(world: &mut World) -> HashMap<ObjectId, Rect> {
 }
 
 /// Compute target slot rectangles (outer, including border) for each
-/// visible tiled window. Hidden (off-tag), floating, and fullscreen
-/// windows are excluded. Takes the layout `params` so callers can hold
-/// the snapshot stable across surrounding work in the same phase.
+/// visible tiled window, output by output — every screen runs its own
+/// master-stack over the windows assigned to it. Hidden (off-tag),
+/// floating, and fullscreen windows are excluded. Takes the layout
+/// `params` so callers can hold the snapshot stable across surrounding
+/// work in the same phase.
 pub fn compute_targets(world: &World, params: &Params) -> HashMap<ObjectId, Rect> {
-    let Some(output) = world.outputs.primary() else {
-        return HashMap::new();
-    };
-    if !output.has_dimensions() {
-        return HashMap::new();
-    }
+    let mut out = HashMap::new();
+    for output in world.outputs.iter() {
+        if !output.has_dimensions() {
+            continue;
+        }
+        let tiled = world.windows.visible_tiled_ids_on(&output.id());
+        if tiled.is_empty() {
+            continue;
+        }
 
-    let tiled = world.windows.visible_tiled_ids();
-    if tiled.is_empty() {
-        return HashMap::new();
-    }
+        // Subtract layer-surface exclusive zones (waybar, panels) from
+        // the tiling area when river has reported them. Falls back to
+        // the full output rectangle until the first non_exclusive_area
+        // event fires.
+        let area = output.tiling_area();
+        let rects = layout::compute(tiled.len() as u32, (area.w, area.h), params);
 
-    // Subtract layer-surface exclusive zones (waybar, panels) from the
-    // tiling area when river has reported them. Falls back to the full
-    // output rectangle until the first non_exclusive_area event fires.
-    let area = output.tiling_area();
-    let rects = layout::compute(tiled.len() as u32, (area.w, area.h), params);
-
-    let mut out = HashMap::with_capacity(tiled.len());
-    for (id, rect) in tiled.into_iter().zip(rects) {
-        out.insert(
-            id,
-            Rect {
-                x: rect.x + area.x,
-                y: rect.y + area.y,
-                w: rect.w,
-                h: rect.h,
-            },
-        );
+        out.reserve(tiled.len());
+        for (id, rect) in tiled.into_iter().zip(rects) {
+            out.insert(
+                id,
+                Rect {
+                    x: rect.x + area.x,
+                    y: rect.y + area.y,
+                    w: rect.w,
+                    h: rect.h,
+                },
+            );
+        }
     }
     out
 }
@@ -176,10 +178,12 @@ pub fn flush_manage(world: &mut World, borders: &BorderConfig) {
         ..
     } = &mut *world;
     let targets = target_cache.targets();
-    // The output a window goes fullscreen on. Single-output for now;
-    // per-output assignment is a v0.3 concern. Cloned once so the loop
-    // below can mutate windows without holding an outputs borrow.
-    let fullscreen_output = outputs.primary().map(|o| o.proxy.clone());
+    // A window goes fullscreen on its own output. Proxies cloned once
+    // so the loop below can mutate windows without holding an outputs
+    // borrow; the first output doubles as the fallback home.
+    let output_proxies: HashMap<ObjectId, crate::wayland_proto::RiverOutputV1> =
+        outputs.iter().map(|o| (o.id(), o.proxy.clone())).collect();
+    let fallback_output = outputs.first().map(|o| o.proxy.clone());
     let (order, by_id) = windows.split_mut();
 
     for id in order {
@@ -199,7 +203,12 @@ pub fn flush_manage(world: &mut World, borders: &BorderConfig) {
         // the render list so it covers the tiled stack underneath it.
         match (entry.fullscreen, entry.fullscreen_on_server) {
             (true, false) => {
-                if let Some(output) = fullscreen_output.as_ref() {
+                let fullscreen_output = entry
+                    .output
+                    .as_ref()
+                    .and_then(|id| output_proxies.get(id))
+                    .or(fallback_output.as_ref());
+                if let Some(output) = fullscreen_output {
                     entry.proxy.fullscreen(output);
                     entry.proxy.inform_fullscreen();
                     entry.node.place_top();

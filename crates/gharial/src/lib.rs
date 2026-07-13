@@ -86,10 +86,11 @@
 // Re-export the modules here so daemon-internal call sites keep their
 // `crate::action::*` / `crate::keysyms::*` paths and external users of
 // the `gharial` crate see the same surface they always did.
-pub use gharial_ipc::{action, client, color, config, keysyms, orientation, value};
+pub use gharial_ipc::{action, client, color, config, edge, keysyms, orientation, value};
 
 pub use gharial_ipc::{
-    Action, BindingSpec, BoolValue, Client, Color, Direction, Error, Orientation, Result,
+    Action, BindingSpec, BoolValue, Client, Color, Direction, Edge, EdgeRef, Error, Orientation,
+    OutputTarget, Result,
 };
 
 // The compile-time config macros are `#[macro_export]`ed at the

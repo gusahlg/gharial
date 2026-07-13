@@ -50,7 +50,10 @@
 // here: the crate's `Result<T>` alias is single-parameter and would
 // shadow the two-parameter `std::result::Result` this module uses for
 // `try_new`. Reach for it as `gharial_ipc::Result`.)
-pub use crate::{Action, BindingSpec, BoolValue, Client, Color, Direction, Error, Orientation};
+pub use crate::{
+    Action, BindingSpec, BoolValue, Client, Color, Direction, Edge, EdgeRef, Error, Orientation,
+    OutputTarget,
+};
 
 /// Inclusive lower bound the daemon clamps `main-ratio` to.
 pub const RATIO_MIN: f32 = 0.05;
@@ -319,6 +322,7 @@ impl Bindings {
 pub struct Config {
     layout: Layout,
     bindings: Bindings,
+    links: Vec<Action>,
     autostart: Vec<Vec<String>>,
 }
 
@@ -340,6 +344,21 @@ impl Config {
         self
     }
 
+    /// Link two output edges so the pointer warps through them (both
+    /// directions). Outputs are referred to by connector name (`DP-1`)
+    /// or 1-based advertisement index (`"1"`, `"2"`, …).
+    pub fn link_outputs(
+        mut self,
+        a_output: impl Into<String>,
+        a_edge: Edge,
+        b_output: impl Into<String>,
+        b_edge: Edge,
+    ) -> Self {
+        self.links
+            .push(Action::link_outputs(a_output, a_edge, b_output, b_edge));
+        self
+    }
+
     /// Queue an autostart program (argv form: command first, then args).
     pub fn spawn<I, S>(mut self, argv: I) -> Self
     where
@@ -351,10 +370,14 @@ impl Config {
         self
     }
 
-    /// Apply the layout, then the bindings, then fire the autostart
-    /// programs — stopping at the first daemon error.
+    /// Apply the layout, then the output edge links, then the bindings,
+    /// then fire the autostart programs — stopping at the first daemon
+    /// error.
     pub fn apply(&self, client: &Client) -> crate::Result<()> {
         self.layout.apply(client)?;
+        for link in &self.links {
+            client.execute(link.clone())?;
+        }
         self.bindings.apply(client)?;
         for argv in &self.autostart {
             let Some((cmd, args)) = argv.split_first() else {

@@ -20,6 +20,7 @@ pub mod action;
 pub mod client;
 pub mod color;
 pub mod config;
+pub mod edge;
 pub mod keysyms;
 pub mod orientation;
 pub mod value;
@@ -27,6 +28,7 @@ pub mod value;
 pub use action::{Action, BindingSpec, Direction};
 pub use client::{Client, Error};
 pub use color::Color;
+pub use edge::{Edge, EdgeRef, OutputTarget};
 pub use orientation::Orientation;
 pub use value::BoolValue;
 

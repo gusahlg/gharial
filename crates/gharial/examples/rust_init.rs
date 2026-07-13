@@ -95,7 +95,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Tags 1..10, with `0` keying tag 10 ──────────────────────────
     for n in 1..=10u8 {
-        let key = if n == 10 { "0".to_string() } else { n.to_string() };
+        let key = if n == 10 {
+            "0".to_string()
+        } else {
+            n.to_string()
+        };
         bind(&g, dry_run, None, &chord(&key), Action::FocusTag(n))?;
         bind(
             &g,
@@ -141,10 +145,7 @@ fn bind(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if dry_run {
         let prefix = mode.map(|m| format!("[{m}] ")).unwrap_or_default();
-        println!(
-            "[dry-run] {prefix}bind {chord} {:?}",
-            action.to_tokens()
-        );
+        println!("[dry-run] {prefix}bind {chord} {:?}", action.to_tokens());
         Ok(())
     } else {
         match mode {

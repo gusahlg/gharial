@@ -6,6 +6,7 @@
 use std::fmt;
 
 use wayland_client::globals::{BindError, GlobalList};
+use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::QueueHandle;
 
 use crate::wayland_proto::{RiverLayerShellV1, RiverWindowManagerV1, RiverXkbBindingsV1};
@@ -25,6 +26,9 @@ pub struct Globals {
     /// shell, please don't auto-close layer surfaces". Required for
     /// waybar / tofi / launchers / panels.
     pub layer_shell: RiverLayerShellV1,
+    /// Registry handle kept around to bind `wl_output` globals on
+    /// demand — that's where output connector names come from.
+    pub registry: WlRegistry,
 }
 
 #[derive(Debug)]
@@ -66,5 +70,6 @@ pub fn bind_all(globals: &GlobalList, qh: &QueueHandle<World>) -> Result<Globals
         manager,
         xkb,
         layer_shell,
+        registry: globals.registry().clone(),
     })
 }

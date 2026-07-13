@@ -6,6 +6,7 @@ pub mod bind;
 pub mod layout;
 pub mod misc;
 pub mod mode;
+pub mod output;
 pub mod tag;
 pub mod window;
 

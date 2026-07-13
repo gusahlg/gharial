@@ -3,7 +3,59 @@
 All notable changes to gharial. Versions follow semantic versioning;
 0.x means the wire/IPC grammar may still evolve.
 
-## [Unreleased]
+## [0.3.0] — multiple screens
+
+### Added
+
+- **Multi-output support**: every screen is an independent view into
+  the tag space, exactly like the single screen behaved before — each
+  output carries its own active tag mask and its own per-tag focus
+  memory, and runs its own master-stack layout. Windows belong to one
+  output; new windows land on the *focused* output. One output is
+  focused at a time: tag commands apply there, keyboard focus is
+  restored there, and switching warps the pointer to that screen unless
+  it's already on it.
+  - `output focus <next|prev|left|right|up|down|NAME>` switches the
+    focused screen (`next`/`prev` cycle advertisement order; the
+    cardinals pick the spatially nearest screen; `NAME` is a connector
+    name like `DP-1` or a 1-based index).
+  - `output send <TARGET>` moves the focused window to another screen;
+    the window adopts that screen's currently visible tags.
+  - `output list` describes outputs (name, geometry, tags, focused
+    marker) and the configured edge links.
+  - Spatial `focus`/`swap` (`left`/`right`/`up`/`down`) work across
+    screen boundaries; output focus follows the window.
+  - Click-to-focus: interacting with any window (`window_interaction`)
+    focuses it, which also moves output focus to its screen.
+  - Connector names come from binding the `wl_output` global river
+    points us at (`wl_output.name`, v4); outputs are also always
+    addressable by 1-based advertisement index.
+
+- **Pointer edge links**: declare how the mouse travels between screens
+  by linking screen edges — `output link DP-1:left DP-2:right` makes
+  the pointer warp from the left edge of DP-1 to the right edge of DP-2
+  and back. Links are bidirectional, preserve the fractional position
+  along the edge, and only fire where the pointer can't cross naturally
+  (adjacent screens keep their seamless boundary), so they're purely
+  additive: wrap-around, non-adjacent screens, and mismatched physical
+  arrangements all become expressible. `output unlink DP-1:left`
+  removes links. Implemented on `river_seat_v1.pointer_position` +
+  `pointer_warp` (v3); while the pointer moves near a linked edge the
+  WM keeps manage sequences flowing so the warp fires promptly.
+
+- All of the above is exposed through `gharialctl output …`, bindable
+  actions (`bind Super+comma output focus prev`), typed `Client`
+  methods (`focus_output`, `send_to_output`, `link_outputs`,
+  `unlink_output`, `list_outputs`), and the compile-time config
+  builder (`Config::link_outputs`, plus the `Edge` / `EdgeRef` /
+  `OutputTarget` vocabulary in `gharial_ipc::edge`).
+
+### Changed
+
+- Fullscreen now covers the window's *own* output instead of always
+  the first advertised one.
+
+## [0.2.2]
 
 ### Added
 

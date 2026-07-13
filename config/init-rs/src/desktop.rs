@@ -144,6 +144,24 @@ fn build_config(home: &str) -> Config {
             .bind(&move_chord, Action::MoveToTag(tag));
     }
 
+    // Outputs (screens): cycle the focused screen — new windows,
+    // tag commands, and keyboard input follow, and the pointer warps
+    // along. Shift variants move the focused window instead.
+    bindings = bindings
+        .bind(
+            chord!("Super+Period"),
+            Action::focus_output(Direction::Next),
+        )
+        .bind(chord!("Super+Comma"), Action::focus_output(Direction::Prev))
+        .bind(
+            chord!("Super+Shift+Period"),
+            Action::send_to_output(Direction::Next),
+        )
+        .bind(
+            chord!("Super+Shift+Comma"),
+            Action::send_to_output(Direction::Prev),
+        );
+
     let screenshot = r#"mkdir -p "$HOME/Pictures/Screenshots" && grim -g "$(slurp)" - | tee "$HOME/Pictures/Screenshots/$(date +%Y-%m-%d_%H-%M-%S).png" | wl-copy"#;
     let hall_of_fame = r#"mkdir -p "$HOME/Pictures/hall-of-fame" && grim -g "$(slurp)" - | tee "$HOME/Pictures/hall-of-fame/$(date +%Y-%m-%d_%H-%M-%S).png" | wl-copy"#;
     if command_available("grim") && command_available("slurp") {
@@ -181,6 +199,11 @@ fn build_config(home: &str) -> Config {
                 .border_color_focused(Color::hex(0xC8324BFF))
                 .border_color_unfocused(Color::hex(0x00C896FF)),
         )
+        // Pointer edge links: uncomment to let the mouse wrap around
+        // the far edges. Outputs are addressed by connector name
+        // (`DP-1`) or 1-based index — `gharialctl output list` shows
+        // both. Links only fire where screens aren't already adjacent.
+        // .link_outputs("1", Edge::Left, "2", Edge::Right)
         .bindings(bindings)
         .spawn(["waybar"])
         .spawn(["wl-paste", "--type", "text", "--watch", "cliphist", "store"])

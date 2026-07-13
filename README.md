@@ -17,18 +17,31 @@ setup — gharial owns the policy layer entirely.
 
 ## Status
 
-**0.2.0** — first usable release. Targets river 0.4+ (the
+**0.3.0** — multi-screen release. Targets river 0.4+ (the
 non-monolithic architecture). Tested against upstream `riverwm/river`
 at commit `da8cf20`, which is the rev the vendored protocol XMLs are
 pinned to. The older river-classic 0.3.x is **not** supported (it uses
 the obsolete `river-layout-v3` protocol).
 
-What 0.2.0 ships:
+What 0.3.0 ships:
 
-- master-stack tiling, per output
+- master-stack tiling, computed per output
+- **multiple screens**: every output is an independent view into the
+  tag space (own active tags, own focus memory). One output is
+  *focused* — new windows land there, tag commands apply there.
+  `output focus <dir|name>` switches screens (keyboard focus and the
+  pointer follow), `output send <dir|name>` moves the focused window
+- **pointer edge links**: `output link DP-1:left DP-2:right` declares
+  where the mouse may pass between screens; the pointer warps through
+  linked edges (both directions, fraction along the edge preserved).
+  Links only fire where screens aren't already adjacent, so the natural
+  boundary between side-by-side outputs stays seamless
 - keyboard bindings via xkb chords, named modes, per-mode enable/disable
-- tags 1..32 with `focus` / `toggle` / `move` / `window-toggle`
-- focus / swap / close / toggle-float / toggle-fullscreen / spawn
+- tags 1..32 with `focus` / `toggle` / `move` / `window-toggle`,
+  per screen
+- focus / swap / close / toggle-float / toggle-fullscreen / spawn;
+  spatial focus/swap crosses screen boundaries
+- click-to-focus: interacting with a window focuses it (and its screen)
 - layer shell — waybar, tofi, mako, panels and launchers all work
 - non-exclusive area tracking — tiles stop short of waybar's reserved zone
 - single-colour focus-aware borders, configurable width and colours
@@ -38,14 +51,14 @@ What 0.2.0 ships:
   always lands focus on the next visible window
 - spawn that actually works (`SIGCHLD` reset + `setsid()` in the child)
 
-What's not in 0.2.0 (planned for 0.3):
+What's not in 0.3.0 (planned later):
 
 - pointer bindings (interactive move/resize via the `op_*` requests)
 - per-tag layout-param overrides
-- multi-seat (currently first seat wins)
+- multi-seat (currently first seat wins; edge links already warp every
+  seat's pointer)
 - decoration surfaces beyond the single coloured border
 - custom layouts beyond master-stack
-- per-output window assignment
 
 ## Design
 
@@ -108,8 +121,6 @@ crates/
 │   │                  + river-xkb-bindings-v1 + river-layer-shell-v1
 │   └── src/
 │       ├── main.rs            entry point
-│       ├── action.rs          Action enum + parser (chord, tag, mode, ...)
-│       ├── keysyms.rs         hand-rolled xkbcommon keysym/modifier table
 │       ├── layout.rs          pure master-stack algorithm
 │       ├── wayland_proto.rs   generated bindings for all three protocols
 │       ├── state/             IPC-side parameter + border store + action sender
@@ -117,15 +128,16 @@ crates/
 │       └── wm/                the wayland-thread state machine
 │           ├── sequence.rs        Phase enum + transition methods
 │           ├── world.rs           the central state struct
-│           ├── globals.rs         binds the three river globals
-│           ├── windows.rs         per-window entry
-│           ├── outputs.rs         per-output entry + non-exclusive area
-│           ├── seats.rs           per-seat entry + layer-shell focus
+│           ├── globals.rs         binds the three river globals + registry
+│           ├── windows.rs         per-window entry (incl. output assignment)
+│           ├── outputs.rs         per-output entry: tags, focus memory, name
+│           ├── seats.rs           per-seat entry + layer-shell focus + pointer
+│           ├── links.rs           pointer edge links + pure warp geometry
 │           ├── bindings.rs        xkb binding registry + mode-aware enable
 │           ├── modes.rs           active-mode tracking
-│           ├── tags.rs            tag bitmask + visibility flush
+│           ├── tags.rs            tag bitmask + per-output visibility flush
 │           ├── render.rs          layout::compute → propose/borders/set_position
-│           ├── actions.rs         Action execution (the big match)
+│           ├── actions/           Action execution, split per concern
 │           └── dispatch/          Dispatch impls split per protocol interface
 └── gharialctl/        the CLI
 ```
@@ -185,6 +197,14 @@ gharialctl bind Super+Q       close
 gharialctl bind Super+Return  spawn rio
 gharialctl bind Super+L       focus next
 gharialctl bind Super+1       tag focus 1
+
+# Multiple screens: focused screen gets new windows + keyboard;
+# link edges to say where the mouse may pass between screens.
+gharialctl bind Super+Period  output focus next
+gharialctl bind Super+Comma   output focus prev
+gharialctl bind Super+Shift+Period output send next
+gharialctl output link DP-1:left DP-2:right   # wrap-around
+gharialctl output list
 
 # Autostart
 gharialctl spawn waybar # (if you use waybar)

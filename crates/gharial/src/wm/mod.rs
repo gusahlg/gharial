@@ -36,6 +36,7 @@ mod bindings;
 mod dispatch;
 mod focus;
 mod globals;
+mod links;
 mod modes;
 mod outputs;
 mod render;
@@ -101,6 +102,14 @@ pub fn run(shared: Shared) -> Result<(), Box<dyn Error>> {
     eprintln!("gharial: ipc socket at {}", ipc.socket_path.display());
 
     let mut world = World::new(shared, bound, qh.clone());
+
+    // Seed the wl_output global map from the initial registry burst;
+    // hotplug arrivals flow through the registry dispatch afterwards.
+    for global in globals.contents().clone_list() {
+        if global.interface == "wl_output" {
+            world.wl_output_globals.insert(global.name, global.version);
+        }
+    }
 
     while world.running() {
         event_loop.dispatch(None, &mut world)?;

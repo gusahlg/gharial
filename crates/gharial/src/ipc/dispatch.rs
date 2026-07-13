@@ -12,7 +12,7 @@ use gharial_ipc::{Request, Response};
 use crate::action::is_layout_key;
 use crate::state::Shared;
 
-use super::handlers::{bind, layout, misc, mode, tag, window};
+use super::handlers::{bind, layout, misc, mode, output, tag, window};
 use super::Notifier;
 
 pub(super) fn handle_client(
@@ -69,6 +69,9 @@ fn dispatch(req: Request, shared: &Shared) -> (Response, bool) {
 
         // Tags.
         "tag" => tag::tag(shared, &args),
+
+        // Outputs (screens).
+        "output" => output::output(shared, &args),
 
         // Diagnostics.
         "ping" => misc::ping(),
