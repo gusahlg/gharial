@@ -4,8 +4,9 @@
 //! `wm` (the wayland-side consumer) can name it without depending on
 //! each other's internals.
 
-use crate::edge::{EdgeRef, OutputTarget};
 use crate::keysyms::{parse_keysym, parse_modifier};
+use crate::output::OutputTarget;
+use crate::value::BoolValue;
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -62,14 +63,9 @@ pub enum Action {
     /// Move the focused window to another output. The window adopts
     /// the target output's currently visible tags.
     SendToOutput(OutputTarget),
-    /// Link two output edges so the pointer warps through them when it
-    /// hits either side. Links are bidirectional.
-    LinkOutputs {
-        a: EdgeRef,
-        b: EdgeRef,
-    },
-    /// Remove any pointer link touching the given output edge.
-    UnlinkOutput(EdgeRef),
+    /// Enable, disable, or toggle automatic pointer warping when the
+    /// focused output changes through an `output focus` action.
+    SetOutputFocusWarp(BoolValue),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -327,11 +323,8 @@ impl Action {
             Self::SendToOutput(target) => {
                 vec!["output".into(), "send".into(), target.to_token()]
             }
-            Self::LinkOutputs { a, b } => {
-                vec!["output".into(), "link".into(), a.to_token(), b.to_token()]
-            }
-            Self::UnlinkOutput(at) => {
-                vec!["output".into(), "unlink".into(), at.to_token()]
+            Self::SetOutputFocusWarp(value) => {
+                vec!["output".into(), "focus-warp".into(), value.as_str().into()]
             }
             // Bind/Unbind aren't bindable actions — the Client emits the
             // `bind`/`unbind` IPC verbs directly. Return empty so misuse
@@ -392,23 +385,10 @@ impl Action {
         Self::SendToOutput(OutputTarget::Named(name.into()))
     }
 
-    /// Link two output edges so the pointer warps through them (both
-    /// directions).
-    pub fn link_outputs(
-        a_output: impl Into<String>,
-        a_edge: crate::edge::Edge,
-        b_output: impl Into<String>,
-        b_edge: crate::edge::Edge,
-    ) -> Self {
-        Self::LinkOutputs {
-            a: EdgeRef::new(a_output, a_edge),
-            b: EdgeRef::new(b_output, b_edge),
-        }
-    }
-
-    /// Remove any pointer link touching the given output edge.
-    pub fn unlink_output(output: impl Into<String>, edge: crate::edge::Edge) -> Self {
-        Self::UnlinkOutput(EdgeRef::new(output, edge))
+    /// Configure whether `output focus` warps the pointer to the newly
+    /// focused output.
+    pub fn set_output_focus_warp(value: BoolValue) -> Self {
+        Self::SetOutputFocusWarp(value)
     }
 
     // Layout-param constructors. Each pins the wire form so the daemon
@@ -486,7 +466,7 @@ fn format_delta_i32(delta: i32) -> String {
 fn parse_output_action(tokens: &[&str]) -> Result<Action, String> {
     let (&sub, rest) = tokens
         .split_first()
-        .ok_or("output: expected focus|send|link|unlink")?;
+        .ok_or("output: expected focus|send|focus-warp")?;
     match sub {
         "focus" => {
             let target = rest
@@ -502,21 +482,12 @@ fn parse_output_action(tokens: &[&str]) -> Result<Action, String> {
                 .ok_or("output send: expected next|prev|left|right|up|down|NAME")?;
             Ok(Action::SendToOutput(OutputTarget::parse(target)))
         }
-        "link" => match rest {
-            [a, b] => Ok(Action::LinkOutputs {
-                a: EdgeRef::parse(a)?,
-                b: EdgeRef::parse(b)?,
-            }),
-            _ => Err("output link: expected two OUTPUT:EDGE arguments \
-                      (e.g. output link DP-1:right DP-2:left)"
-                .into()),
-        },
-        "unlink" => {
-            let at = rest
+        "focus-warp" => {
+            let value = rest
                 .first()
                 .copied()
-                .ok_or("output unlink: expected OUTPUT:EDGE")?;
-            Ok(Action::UnlinkOutput(EdgeRef::parse(at)?))
+                .ok_or("output focus-warp: expected on|off|toggle")?;
+            BoolValue::parse(value).map(Action::SetOutputFocusWarp)
         }
         other => Err(format!("output: unknown subcommand {other}")),
     }
@@ -951,7 +922,7 @@ mod tests {
 
     #[test]
     fn parse_action_output_focus_and_send() {
-        use crate::edge::OutputTarget;
+        use crate::output::OutputTarget;
         assert!(matches!(
             Action::parse(&["output", "focus", "next"]).unwrap(),
             Action::FocusOutput(OutputTarget::Direction(Direction::Next))
@@ -969,37 +940,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_action_output_link_and_unlink() {
-        use crate::edge::Edge;
-        match Action::parse(&["output", "link", "DP-1:right", "DP-2:left"]).unwrap() {
-            Action::LinkOutputs { a, b } => {
-                assert_eq!(a.output, "DP-1");
-                assert_eq!(a.edge, Edge::Right);
-                assert_eq!(b.output, "DP-2");
-                assert_eq!(b.edge, Edge::Left);
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
+    fn parse_action_output_focus_warp() {
         assert!(matches!(
-            Action::parse(&["output", "unlink", "DP-1:right"]).unwrap(),
-            Action::UnlinkOutput(at) if at.output == "DP-1"
+            Action::parse(&["output", "focus-warp", "on"]).unwrap(),
+            Action::SetOutputFocusWarp(BoolValue::On)
         ));
-        assert!(Action::parse(&["output", "link", "DP-1:right"]).is_err());
-        assert!(Action::parse(&["output", "link", "DP-1:up", "DP-2:left"]).is_err());
-        assert!(Action::parse(&["output", "unlink", "DP-1"]).is_err());
+        assert!(matches!(
+            Action::parse(&["output", "focus-warp", "off"]).unwrap(),
+            Action::SetOutputFocusWarp(BoolValue::Off)
+        ));
+        assert!(matches!(
+            Action::parse(&["output", "focus-warp", "toggle"]).unwrap(),
+            Action::SetOutputFocusWarp(BoolValue::Toggle)
+        ));
+
+        let missing = Action::parse(&["output", "focus-warp"]).unwrap_err();
+        assert!(missing.contains("on|off|toggle"));
+        let invalid = Action::parse(&["output", "focus-warp", "maybe"]).unwrap_err();
+        assert!(invalid.contains("maybe"));
+        assert!(invalid.contains("on|off|toggle"));
     }
 
     #[test]
     fn every_output_variant_round_trips() {
-        use crate::edge::Edge;
         let cases = vec![
             Action::focus_output(Direction::Next),
             Action::focus_output(Direction::Left),
             Action::focus_output_named("DP-2"),
             Action::send_to_output(Direction::Prev),
             Action::send_to_output_named("2"),
-            Action::link_outputs("DP-1", Edge::Right, "DP-2", Edge::Left),
-            Action::unlink_output("DP-1", Edge::Right),
+            Action::set_output_focus_warp(BoolValue::On),
+            Action::set_output_focus_warp(BoolValue::Off),
+            Action::set_output_focus_warp(BoolValue::Toggle),
         ];
         for action in cases {
             let tokens = action.to_tokens();

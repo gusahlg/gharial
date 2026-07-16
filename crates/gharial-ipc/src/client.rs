@@ -287,24 +287,14 @@ impl Client {
         self.execute(Action::send_to_output_named(name))
     }
 
-    /// Link two output edges so the pointer warps through them.
-    pub fn link_outputs(
-        &self,
-        a_output: &str,
-        a_edge: crate::edge::Edge,
-        b_output: &str,
-        b_edge: crate::edge::Edge,
-    ) -> Result<()> {
-        self.execute(Action::link_outputs(a_output, a_edge, b_output, b_edge))
-    }
-
-    /// Remove any pointer link touching the given output edge.
-    pub fn unlink_output(&self, output: &str, edge: crate::edge::Edge) -> Result<()> {
-        self.execute(Action::unlink_output(output, edge))
+    /// Configure whether `output focus` warps the pointer to the newly
+    /// focused output.
+    pub fn set_output_focus_warp(&self, value: impl Into<BoolValue>) -> Result<()> {
+        self.execute(Action::set_output_focus_warp(value.into()))
     }
 
     /// One-line description of every output the daemon knows about
-    /// (name, geometry, active tags, focused marker, edge links).
+    /// (name, geometry, active tags, and focused marker).
     pub fn list_outputs(&self) -> Result<String> {
         self.send_expect_ok("output", &["list"])
     }

@@ -12,7 +12,6 @@ use crate::state::Shared;
 
 use super::bindings::Bindings;
 use super::globals::Globals;
-use super::links::EdgeLinks;
 use super::modes::Modes;
 use super::outputs::Outputs;
 use super::render::TargetCache;
@@ -37,8 +36,9 @@ pub struct World {
     pub seats: Seats,
     pub bindings: Bindings,
     pub modes: Modes,
-    /// Pointer edge links between outputs (the "portal" config).
-    pub links: EdgeLinks,
+    /// Whether an explicit `output focus` action moves the pointer to
+    /// the newly focused output.
+    pub warp_pointer_on_output_focus: bool,
     /// `wl_output` globals the registry has advertised, keyed by global
     /// name → version. Seeded from the initial global list and kept
     /// current by the registry dispatch; consulted when a river output
@@ -69,7 +69,7 @@ impl World {
             seats: Seats::default(),
             bindings: Bindings::default(),
             modes: Modes::default(),
-            links: EdgeLinks::default(),
+            warp_pointer_on_output_focus: true,
             wl_output_globals: HashMap::new(),
             target_cache: TargetCache::default(),
             pending_actions: VecDeque::new(),

@@ -274,8 +274,7 @@ fn client_output_methods_route_to_output_verb() {
         client.focus_output(Direction::Next),
         client.focus_output_named("DP-2"),
         client.send_to_output(Direction::Right),
-        client.link_outputs("DP-1", gharial::Edge::Left, "DP-2", gharial::Edge::Right),
-        client.unlink_output("DP-1", gharial::Edge::Left),
+        client.set_output_focus_warp(false),
     ] {
         let err = r.unwrap_err();
         assert!(matches!(err, gharial::Error::Daemon(msg) if msg.contains("wayland")));
@@ -310,12 +309,11 @@ fn output_list_reflects_the_shared_mirror() {
                 focused: false,
             },
         ],
-        links: vec![("DP-1:left".into(), "DP-2:right".into())],
     });
     let listed = client.list_outputs().unwrap();
     assert!(listed.contains("DP-1 1920x1080+0+0 tags=0x00000001 focused"));
     assert!(listed.contains("DP-2 2560x1440+1920+0 tags=0x00000002"));
-    assert!(listed.contains("link DP-1:left<->DP-2:right"));
+    assert!(!listed.contains("link"));
 }
 
 #[test]
@@ -325,13 +323,9 @@ fn output_verb_rejects_malformed_arguments() {
     for args in [
         vec![],
         vec!["focus".to_string()],
+        vec!["focus-warp".to_string()],
+        vec!["focus-warp".to_string(), "maybe".to_string()],
         vec!["link".to_string(), "DP-1:right".to_string()],
-        vec![
-            "link".to_string(),
-            "DP-1:diagonal".to_string(),
-            "DP-2:left".to_string(),
-        ],
-        vec!["unlink".to_string(), "DP-1".to_string()],
     ] {
         let resp = send_one(&path, &Request::new("output", args.clone())).unwrap();
         assert!(!resp.is_ok(), "expected error for output {args:?}");

@@ -12,7 +12,7 @@
 //! | `focus`    | `FocusDirection`, internal `set_focus`/`ensure_*`  |
 //! | `window`   | `Close`, `ToggleFloat`, `SwapDirection`            |
 //! | `tag`      | `FocusTag` / `ToggleTag` / `MoveToTag` / window-tag |
-//! | `output`   | `FocusOutput` / `SendToOutput` / edge links         |
+//! | `output`   | output focus/send and focus-warp policy             |
 //! | `mode`     | `EnterMode` / `ExitMode` / `Bind` / `Unbind`       |
 //! | `layout`   | `Layout { key, args }`                             |
 //! | `spawn`    | `Spawn { cmd, args }`                              |
@@ -57,7 +57,6 @@ pub fn execute(action: Action, world: &mut World) {
         Action::ToggleWindowTag(n) => tag::toggle_window_tag(world, n),
         Action::FocusOutput(target) => output::focus_output(world, &target),
         Action::SendToOutput(target) => output::send_to_output(world, &target),
-        Action::LinkOutputs { a, b } => output::link_outputs(world, a, b),
-        Action::UnlinkOutput(at) => output::unlink_output(world, &at),
+        Action::SetOutputFocusWarp(value) => output::set_output_focus_warp(world, value),
     }
 }

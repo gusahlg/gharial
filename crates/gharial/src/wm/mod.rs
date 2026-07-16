@@ -36,7 +36,6 @@ mod bindings;
 mod dispatch;
 mod focus;
 mod globals;
-mod links;
 mod modes;
 mod outputs;
 mod render;

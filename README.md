@@ -29,13 +29,10 @@ What 0.3.0 ships:
 - **multiple screens**: every output is an independent view into the
   tag space (own active tags, own focus memory). One output is
   *focused* — new windows land there, tag commands apply there.
-  `output focus <dir|name>` switches screens (keyboard focus and the
-  pointer follow), `output send <dir|name>` moves the focused window
-- **pointer edge links**: `output link DP-1:left DP-2:right` declares
-  where the mouse may pass between screens; the pointer warps through
-  linked edges (both directions, fraction along the edge preserved).
-  Links only fire where screens aren't already adjacent, so the natural
-  boundary between side-by-side outputs stays seamless
+  `output focus <dir|name>` switches screens (keyboard focus follows;
+  the pointer follows too by default), `output send <dir|name>` moves
+  the focused window. `output focus-warp off` disables only that
+  automatic warp
 - keyboard bindings via xkb chords, named modes, per-mode enable/disable
 - tags 1..32 with `focus` / `toggle` / `move` / `window-toggle`,
   per screen
@@ -55,8 +52,7 @@ What's not in 0.3.0 (planned later):
 
 - pointer bindings (interactive move/resize via the `op_*` requests)
 - per-tag layout-param overrides
-- multi-seat (currently first seat wins; edge links already warp every
-  seat's pointer)
+- multi-seat (currently first seat wins)
 - decoration surfaces beyond the single coloured border
 - custom layouts beyond master-stack
 
@@ -69,6 +65,11 @@ receives state from river (new windows, new outputs, key bindings
 firing) and tells river what to do (focus this window, propose these
 dimensions, place that node here). River draws frames; gharial makes
 the decisions about what should be drawn.
+
+Output mode, scale, transform, position, and therefore the boundaries
+across which the pointer can move are compositor policy. Configure them
+with an output manager such as kanshi; gharial only switches its focused
+output and moves windows between outputs.
 
 It is not a desktop environment. No bar, no launcher, no notification
 daemon. Use waybar / tofi / mako / etc. alongside.
@@ -132,7 +133,6 @@ crates/
 │           ├── windows.rs         per-window entry (incl. output assignment)
 │           ├── outputs.rs         per-output entry: tags, focus memory, name
 │           ├── seats.rs           per-seat entry + layer-shell focus + pointer
-│           ├── links.rs           pointer edge links + pure warp geometry
 │           ├── bindings.rs        xkb binding registry + mode-aware enable
 │           ├── modes.rs           active-mode tracking
 │           ├── tags.rs            tag bitmask + per-output visibility flush
@@ -198,12 +198,14 @@ gharialctl bind Super+Return  spawn rio
 gharialctl bind Super+L       focus next
 gharialctl bind Super+1       tag focus 1
 
-# Multiple screens: focused screen gets new windows + keyboard;
-# link edges to say where the mouse may pass between screens.
+# Multiple screens: focused screen gets new windows + keyboard.
+# Output geometry and pointer adjacency are configured outside gharial.
 gharialctl bind Super+Period  output focus next
 gharialctl bind Super+Comma   output focus prev
 gharialctl bind Super+Shift+Period output send next
-gharialctl output link DP-1:left DP-2:right   # wrap-around
+# Explicit output focus moves the pointer by default. To keep it in
+# place instead, uncomment this:
+# gharialctl output focus-warp off
 gharialctl output list
 
 # Autostart
@@ -246,6 +248,16 @@ level too: `Action` has a typed constructor for every verb and
 [`crates/gharial-ipc/examples/typed_config.rs`](crates/gharial-ipc/examples/typed_config.rs)
 for a complete config, and [`config/init-rs`](config/init-rs) for a
 Rust binary that also brings up the session.
+
+The top-level `Config` builder also exposes output-focus pointer
+warping. It is enabled when omitted; disable that automatic warp like
+this:
+
+```rust
+use gharial_ipc::config::Config;
+
+let config = Config::new().warp_pointer_on_output_focus(false);
+```
 
 ## IPC
 

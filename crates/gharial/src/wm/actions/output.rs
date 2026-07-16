@@ -1,17 +1,18 @@
-//! Output (screen) actions: switch the focused output, send the
-//! focused window to another output, and manage pointer edge links.
+//! Output (screen) actions: switch the focused output and send the
+//! focused window to another output.
 //!
 //! The focused output is where new windows appear, where tag commands
-//! apply, and where keyboard focus is restored. Switching it also warps
-//! the pointer to that screen (unless it is already there) so pointer
-//! and keyboard never end up on different screens.
+//! apply, and where keyboard focus is restored. By default switching it
+//! also warps the pointer to that screen (unless it is already there);
+//! configuration can leave the pointer in place instead.
 
 use wayland_client::backend::ObjectId;
 use wayland_client::Proxy;
 
 use crate::action::Direction;
-use crate::edge::{EdgeRef, OutputTarget};
 use crate::layout::Rect;
+use crate::output::OutputTarget;
+use crate::value::BoolValue;
 
 use super::super::spatial::pick_neighbor;
 use super::super::world::World;
@@ -61,7 +62,9 @@ pub(in crate::wm) fn focus_output(world: &mut World, target: &OutputTarget) {
         Some(id) => set_focus(world, &seat_id, &id),
         None => clear_focus(world, &seat_id),
     }
-    warp_pointer_to_output(world, &output_id);
+    if world.warp_pointer_on_output_focus {
+        warp_pointer_to_output(world, &output_id);
+    }
 }
 
 pub(in crate::wm) fn send_to_output(world: &mut World, target: &OutputTarget) {
@@ -94,12 +97,19 @@ pub(in crate::wm) fn send_to_output(world: &mut World, target: &OutputTarget) {
     apply_tag_change(world);
 }
 
-pub(in crate::wm) fn link_outputs(world: &mut World, a: EdgeRef, b: EdgeRef) {
-    world.links.link(a, b);
+/// Configure whether explicit output-focus actions move the pointer to
+/// the newly focused output.
+pub(in crate::wm) fn set_output_focus_warp(world: &mut World, value: BoolValue) {
+    world.warp_pointer_on_output_focus =
+        resolve_output_focus_warp(world.warp_pointer_on_output_focus, value);
 }
 
-pub(in crate::wm) fn unlink_output(world: &mut World, at: &EdgeRef) {
-    world.links.unlink(at);
+fn resolve_output_focus_warp(current: bool, value: BoolValue) -> bool {
+    match value {
+        BoolValue::On => true,
+        BoolValue::Off => false,
+        BoolValue::Toggle => !current,
+    }
 }
 
 /// Warp the pointer to the centre of `output_id` unless it is already
@@ -133,4 +143,17 @@ fn warp_pointer_to_output(world: &mut World, output_id: &ObjectId) {
     let center = (rect.x + rect.w as i32 / 2, rect.y + rect.h as i32 / 2);
     seat.proxy.pointer_warp(center.0, center.1);
     seat.last_pointer = Some(center);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_focus_warp_setting_handles_on_off_and_toggle() {
+        assert!(resolve_output_focus_warp(false, BoolValue::On));
+        assert!(!resolve_output_focus_warp(true, BoolValue::Off));
+        assert!(resolve_output_focus_warp(false, BoolValue::Toggle));
+        assert!(!resolve_output_focus_warp(true, BoolValue::Toggle));
+    }
 }

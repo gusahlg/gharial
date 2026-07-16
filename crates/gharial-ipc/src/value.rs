@@ -14,6 +14,16 @@ pub enum BoolValue {
 }
 
 impl BoolValue {
+    /// Parse the canonical boolean tokens accepted by action grammars.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            "toggle" => Ok(Self::Toggle),
+            other => Err(format!("invalid boolean: {other} (expected on|off|toggle)")),
+        }
+    }
+
     /// Token form accepted by the daemon's grammar.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -61,6 +71,22 @@ mod tests {
     fn display_matches_as_str() {
         for b in [BoolValue::On, BoolValue::Off, BoolValue::Toggle] {
             assert_eq!(format!("{b}"), b.as_str());
+        }
+    }
+
+    #[test]
+    fn parse_accepts_exactly_the_canonical_tokens() {
+        assert_eq!(BoolValue::parse("on"), Ok(BoolValue::On));
+        assert_eq!(BoolValue::parse("off"), Ok(BoolValue::Off));
+        assert_eq!(BoolValue::parse("toggle"), Ok(BoolValue::Toggle));
+
+        for invalid in ["", "true", "false", "yes", "no", "maybe"] {
+            let error = BoolValue::parse(invalid).unwrap_err();
+            assert!(
+                error.contains(invalid),
+                "{error:?} should mention {invalid:?}"
+            );
+            assert!(error.contains("on|off|toggle"));
         }
     }
 }

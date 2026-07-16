@@ -2,9 +2,8 @@
 //!
 //! Three inputs matter here:
 //!   * `pointer_enter`/`pointer_leave` keep `pointer_over` current.
-//!   * `pointer_position` feeds the edge-link warp logic (the position
-//!     is only reported during manage sequences; the manager dispatch
-//!     keeps samples flowing while the pointer is near a linked edge).
+//!   * `pointer_position` records the cursor's last global position so
+//!     explicit output-focus changes avoid redundant pointer warps.
 //!   * `window_interaction` is click-to-focus: clicking a window gives
 //!     it keyboard focus, which also moves output focus to its screen.
 
@@ -48,10 +47,7 @@ impl Dispatch<RiverSeatV1, ()> for World {
             }
             iface::Event::PointerPosition { x, y } => {
                 if let Some(entry) = state.seats.get_mut(&id) {
-                    if entry.last_pointer != Some((x, y)) {
-                        entry.last_pointer = Some((x, y));
-                        entry.pointer_moved = true;
-                    }
+                    entry.last_pointer = Some((x, y));
                 }
             }
             iface::Event::WindowInteraction { window } => {

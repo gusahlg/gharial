@@ -1,6 +1,6 @@
 //! `wl_output` event handler — we bind these globals only to learn the
 //! connector name (`DP-1`, `HDMI-A-1`, …) so users can refer to outputs
-//! stably in `output focus` / `output link` config. Geometry comes from
+//! stably in `output focus` / `output send` config. Geometry comes from
 //! the river protocol, not from here.
 
 use wayland_client::protocol::wl_output::{self, WlOutput};

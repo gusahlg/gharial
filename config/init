@@ -71,18 +71,17 @@ done
 
 # ─── Outputs (screens) ──────────────────────────────────────────────
 # Every screen is its own view into the tags. The focused screen gets
-# new windows, tag commands, and keyboard focus; the pointer warps
-# along when you switch.
+# new windows, tag commands, and keyboard focus. The pointer follows
+# an explicit output-focus change by default. Disable only that warp
+# by uncommenting this:
+# gharialctl output focus-warp off
 gharialctl bind "$mod+Period"        output focus next
 gharialctl bind "$mod+Comma"         output focus prev
 gharialctl bind "$mod+Shift+Period"  output send next
 gharialctl bind "$mod+Shift+Comma"   output send prev
 
-# Let the mouse wrap around the far edges (uncomment and adjust names —
-# `gharialctl output list` shows them). Linked edges are the only
-# places the pointer warps between non-adjacent screens; side-by-side
-# screens keep their natural seamless boundary.
-# gharialctl output link DP-1:left DP-2:right
+# Output mode, position, and pointer adjacency belong in the compositor's
+# output manager (for example kanshi), not in gharial.
 
 # ─── tile_ratio mode ────────────────────────────────────────────────
 gharialctl bind "$mod+B"                       mode tile_ratio

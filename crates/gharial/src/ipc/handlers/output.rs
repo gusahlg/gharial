@@ -5,13 +5,12 @@
 //!                               switch the focused screen
 //!   `output send <next|prev|left|right|up|down|NAME>`
 //!                               move the focused window to a screen
-//!   `output link A:EDGE B:EDGE` link two screen edges so the pointer
-//!                               warps through them (both directions)
-//!   `output unlink A:EDGE`      remove links touching that edge
-//!   `output list`               describe outputs + configured links
+//!   `output focus-warp <on|off|toggle>`
+//!                               control pointer movement on focus
+//!   `output list`               describe outputs
 //!
 //! Outputs are addressed by connector name (`DP-1`) or 1-based index in
-//! advertisement order; edges are `left|right|top|bottom`.
+//! advertisement order.
 
 use gharial_ipc::Response;
 
@@ -42,13 +41,13 @@ fn prepend_output<'a>(args: &'a [&'a str]) -> Vec<&'a str> {
 }
 
 /// One line, semicolon-separated:
-/// `DP-1 1920x1080+0+0 tags=0x00000001 focused; DP-2 ...; link DP-1:right<->DP-2:left`
+/// `DP-1 1920x1080+0+0 tags=0x00000001 focused; DP-2 ...`
 fn format_list(shared: &Shared) -> String {
     let info = shared.outputs_info();
     if info.outputs.is_empty() {
         return "no outputs".into();
     }
-    let mut parts: Vec<String> = info
+    let parts: Vec<String> = info
         .outputs
         .iter()
         .map(|o| {
@@ -64,8 +63,5 @@ fn format_list(shared: &Shared) -> String {
             )
         })
         .collect();
-    for (a, b) in &info.links {
-        parts.push(format!("link {a}<->{b}"));
-    }
     parts.join("; ")
 }

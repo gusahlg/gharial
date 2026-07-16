@@ -145,8 +145,9 @@ fn build_config(home: &str) -> Config {
     }
 
     // Outputs (screens): cycle the focused screen — new windows,
-    // tag commands, and keyboard input follow, and the pointer warps
-    // along. Shift variants move the focused window instead.
+    // tag commands, and keyboard input follow. By default the pointer
+    // follows explicit output-focus changes too. Shift variants move
+    // the focused window instead.
     bindings = bindings
         .bind(
             chord!("Super+Period"),
@@ -189,6 +190,10 @@ fn build_config(home: &str) -> Config {
         .bind_in_mode("tile_ratio", chord!("Escape"), Action::ExitMode);
 
     Config::new()
+        // Output-focus pointer warping is enabled by default. Uncomment
+        // this to keep the pointer in place when the bindings above
+        // switch screens.
+        // .warp_pointer_on_output_focus(false)
         .layout(
             Layout::new()
                 .gaps(0)
@@ -199,11 +204,8 @@ fn build_config(home: &str) -> Config {
                 .border_color_focused(Color::hex(0xC8324BFF))
                 .border_color_unfocused(Color::hex(0x00C896FF)),
         )
-        // Pointer edge links: uncomment to let the mouse wrap around
-        // the far edges. Outputs are addressed by connector name
-        // (`DP-1`) or 1-based index — `gharialctl output list` shows
-        // both. Links only fire where screens aren't already adjacent.
-        // .link_outputs("1", Edge::Left, "2", Edge::Right)
+        // Configure output modes, positions, and pointer adjacency with
+        // the compositor's output manager (for example kanshi).
         .bindings(bindings)
         .spawn(["waybar"])
         .spawn(["wl-paste", "--type", "text", "--watch", "cliphist", "store"])

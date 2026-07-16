@@ -43,12 +43,10 @@ pub struct OutputInfo {
     pub focused: bool,
 }
 
-/// Output + edge-link mirror for `output list`.
+/// Output mirror for `output list`.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct OutputsInfo {
     pub outputs: Vec<OutputInfo>,
-    /// Bidirectional links as `(OUTPUT:EDGE, OUTPUT:EDGE)` token pairs.
-    pub links: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,7 +99,7 @@ pub struct Shared {
 struct Inner {
     params: Params,
     borders: BorderConfig,
-    /// Output/link mirror for `output list`. Written by the wayland
+    /// Output mirror for `output list`. Written by the wayland
     /// thread, read by IPC; changing it never sets `dirty` (it *is*
     /// derived from wayland state, not a cause of relayout).
     outputs: OutputsInfo,

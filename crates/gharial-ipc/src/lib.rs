@@ -20,16 +20,16 @@ pub mod action;
 pub mod client;
 pub mod color;
 pub mod config;
-pub mod edge;
 pub mod keysyms;
 pub mod orientation;
+pub mod output;
 pub mod value;
 
 pub use action::{Action, BindingSpec, Direction};
 pub use client::{Client, Error};
 pub use color::Color;
-pub use edge::{Edge, EdgeRef, OutputTarget};
 pub use orientation::Orientation;
+pub use output::OutputTarget;
 pub use value::BoolValue;
 
 /// Outcome of a [`Client`] method. Re-exported at the crate root so

@@ -26,12 +26,9 @@ pub struct SeatEntry {
     /// so launchers like tofi can actually receive input.
     pub layer_focus_active: bool,
     /// Last pointer position reported via `pointer_position`, in the
-    /// compositor's global logical coordinates. Drives edge-link warps.
+    /// compositor's global logical coordinates. Used to avoid redundant
+    /// pointer warps during explicit output-focus changes.
     pub last_pointer: Option<(i32, i32)>,
-    /// Set when a fresh `pointer_position` arrived since the last
-    /// manage sequence — the edge-link poll loop only keeps requesting
-    /// manage sequences while the pointer is actually moving.
-    pub pointer_moved: bool,
 }
 
 impl SeatEntry {
@@ -44,7 +41,6 @@ impl SeatEntry {
             layer_shell: None,
             layer_focus_active: false,
             last_pointer: None,
-            pointer_moved: false,
         }
     }
 

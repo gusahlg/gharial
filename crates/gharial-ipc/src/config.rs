@@ -51,8 +51,7 @@
 // shadow the two-parameter `std::result::Result` this module uses for
 // `try_new`. Reach for it as `gharial_ipc::Result`.)
 pub use crate::{
-    Action, BindingSpec, BoolValue, Client, Color, Direction, Edge, EdgeRef, Error, Orientation,
-    OutputTarget,
+    Action, BindingSpec, BoolValue, Client, Color, Direction, Error, Orientation, OutputTarget,
 };
 
 /// Inclusive lower bound the daemon clamps `main-ratio` to.
@@ -313,8 +312,10 @@ impl Bindings {
 
 // ── Top-level config ─────────────────────────────────────────────────
 
-/// A whole config: layout/border parameters, bindings, and autostart
-/// programs, applied in that order by [`Config::apply`].
+/// A whole config: layout/border parameters, output-focus behaviour,
+/// bindings, and autostart programs, applied in that order by
+/// [`Config::apply`]. Physical output layout belongs to the compositor's
+/// output manager (for example kanshi), not to gharial.
 ///
 /// This is sugar over applying a [`Layout`] and [`Bindings`] yourself —
 /// use it when you want one `apply` call for the entire session.
@@ -322,7 +323,7 @@ impl Bindings {
 pub struct Config {
     layout: Layout,
     bindings: Bindings,
-    links: Vec<Action>,
+    output_focus_warp: Option<bool>,
     autostart: Vec<Vec<String>>,
 }
 
@@ -344,18 +345,11 @@ impl Config {
         self
     }
 
-    /// Link two output edges so the pointer warps through them (both
-    /// directions). Outputs are referred to by connector name (`DP-1`)
-    /// or 1-based advertisement index (`"1"`, `"2"`, …).
-    pub fn link_outputs(
-        mut self,
-        a_output: impl Into<String>,
-        a_edge: Edge,
-        b_output: impl Into<String>,
-        b_edge: Edge,
-    ) -> Self {
-        self.links
-            .push(Action::link_outputs(a_output, a_edge, b_output, b_edge));
+    /// Configure whether `output focus` warps the pointer to the newly
+    /// focused output. The daemon defaults to enabled when this setting
+    /// is omitted.
+    pub fn warp_pointer_on_output_focus(mut self, enabled: bool) -> Self {
+        self.output_focus_warp = Some(enabled);
         self
     }
 
@@ -370,13 +364,13 @@ impl Config {
         self
     }
 
-    /// Apply the layout, then the output edge links, then the bindings,
-    /// then fire the autostart programs — stopping at the first daemon
-    /// error.
+    /// Apply the layout, output-focus warp setting, and bindings in that
+    /// order, then fire the autostart programs — stopping at the first
+    /// daemon error.
     pub fn apply(&self, client: &Client) -> crate::Result<()> {
         self.layout.apply(client)?;
-        for link in &self.links {
-            client.execute(link.clone())?;
+        if let Some(enabled) = self.output_focus_warp {
+            client.set_output_focus_warp(enabled)?;
         }
         self.bindings.apply(client)?;
         for argv in &self.autostart {
@@ -494,6 +488,24 @@ mod tests {
         // And what it validated matches the runtime parser.
         let spec = BindingSpec::parse(c).unwrap();
         assert_eq!(spec, BindingSpec::parse_const(c).unwrap());
+    }
+
+    #[test]
+    fn output_focus_warp_builder_is_optional_and_last_value_wins() {
+        assert_eq!(Config::new().output_focus_warp, None);
+        assert_eq!(
+            Config::new()
+                .warp_pointer_on_output_focus(false)
+                .output_focus_warp,
+            Some(false)
+        );
+        assert_eq!(
+            Config::new()
+                .warp_pointer_on_output_focus(false)
+                .warp_pointer_on_output_focus(true)
+                .output_focus_warp,
+            Some(true)
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! Besides tracking geometry we bind the corresponding `wl_output`
 //! global as soon as river tells us its global name — that's where the
 //! connector name (`DP-1`) comes from, which is how users refer to
-//! outputs in `output focus`/`output link` config.
+//! outputs in `output focus`/`output send` config.
 
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
