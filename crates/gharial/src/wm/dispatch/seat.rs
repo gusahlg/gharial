@@ -1,7 +1,5 @@
 //! `river_seat_v1` event handler.
 //!
-//! Three inputs matter here:
-//!   * `pointer_enter`/`pointer_leave` keep `pointer_over` current.
 //!   * `pointer_position` records the cursor's last global position so
 //!     explicit output-focus changes avoid redundant pointer warps.
 //!   * `window_interaction` is click-to-focus: clicking a window gives
@@ -27,22 +25,16 @@ impl Dispatch<RiverSeatV1, ()> for World {
         match event {
             iface::Event::Removed => {
                 if let Some(entry) = state.seats.remove(&id) {
+                    if let Some(ls) = entry.layer_shell {
+                        ls.destroy();
+                    }
                     entry.proxy.destroy();
+                    state.bindings.dirty = true;
                 }
             }
             iface::Event::WlSeat { name } => {
                 if let Some(entry) = state.seats.get_mut(&id) {
                     entry.wl_seat_name = Some(name);
-                }
-            }
-            iface::Event::PointerEnter { window } => {
-                if let Some(entry) = state.seats.get_mut(&id) {
-                    entry.pointer_over = Some(window.id());
-                }
-            }
-            iface::Event::PointerLeave => {
-                if let Some(entry) = state.seats.get_mut(&id) {
-                    entry.pointer_over = None;
                 }
             }
             iface::Event::PointerPosition { x, y } => {
@@ -51,17 +43,15 @@ impl Dispatch<RiverSeatV1, ()> for World {
                 }
             }
             iface::Event::WindowInteraction { window } => {
-                // Click-to-focus. Focus requests are manage-bucket, so
-                // route through the pending queue that the next
-                // manage_start (which this event is guaranteed to be
-                // followed by) drains.
+                // Focus requests are manage-bucket; a manage sequence is
+                // guaranteed to follow this event.
                 state.push_pending_focus(window.id());
             }
-            iface::Event::ShellSurfaceInteraction { .. }
+            iface::Event::PointerEnter { .. }
+            | iface::Event::PointerLeave
+            | iface::Event::ShellSurfaceInteraction { .. }
             | iface::Event::OpDelta { .. }
-            | iface::Event::OpRelease => {
-                // Interactive ops (move/resize) are a future concern.
-            }
+            | iface::Event::OpRelease => {}
         }
     }
 }

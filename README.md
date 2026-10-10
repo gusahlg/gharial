@@ -17,43 +17,41 @@ setup — gharial owns the policy layer entirely.
 
 ## Status
 
-**0.3.0** — multi-screen release. Targets river 0.4+ (the
+**0.4.0** — scripted placement and reliability. Targets river 0.4+ (the
 non-monolithic architecture). Tested against upstream `riverwm/river`
-at commit `da8cf20`, which is the rev the vendored protocol XMLs are
-pinned to. The older river-classic 0.3.x is **not** supported (it uses
-the obsolete `river-layout-v3` protocol).
+at commit `da8cf20` (the rev the vendored protocol XMLs are pinned to)
+and river 0.4.8. The older river-classic 0.3.x is **not** supported (it
+uses the obsolete `river-layout-v3` protocol).
 
-What 0.3.0 ships:
+What it does:
 
 - master-stack tiling, computed per output
 - **multiple screens**: every output is an independent view into the
   tag space (own active tags, own focus memory). One output is
   *focused* — new windows land there, tag commands apply there.
-  `output focus <dir|name>` switches screens (keyboard focus follows;
-  the pointer follows too by default), `output send <dir|name>` moves
-  the focused window. `output focus-warp off` disables only that
-  automatic warp
-- keyboard bindings via xkb chords, named modes, per-mode enable/disable
-- tags 1..32 with `focus` / `toggle` / `move` / `window-toggle`,
-  per screen
-- focus / swap / close / toggle-float / toggle-fullscreen / spawn;
-  spatial focus/swap crosses screen boundaries
-- click-to-focus: interacting with a window focuses it (and its screen)
-- layer shell — waybar, tofi, mako, panels and launchers all work
-- non-exclusive area tracking — tiles stop short of waybar's reserved zone
-- single-colour focus-aware borders, configurable width and colours
-- server-side decorations: `use_ssd` + `set_tiled` so apps drop their
-  own titlebars where they can
-- always-something-focused invariant: closing or hiding a window
-  always lands focus on the next visible window
-- spawn that actually works (`SIGCHLD` reset + `setsid()` in the child)
+  Windows on an unplugged screen move over and return when it comes back
+- **window rules**: match by app_id/title glob or process tree and decide
+  output, tags, floating/tiled, fullscreen, size, position, sticky,
+  locked geometry, border, and focus — before the window's first frame
+- **scripting**: `window list` (tab-separated or JSON, geometry ready for
+  `grim`), `window SEL <placement>`, `spawn --placement -- cmd`,
+  `wait window SEL`, process-scoped `output view` / `output presentation`
+- tags 1..32 with `focus` / `toggle` / `move` / `window-toggle`, per
+  screen; **sticky** windows show on every tag
+- directional focus/swap that goes to the window you see next to the
+  focused one, across screens; click-to-focus
+- dialogs and fixed-size windows float, centred on their parent's screen
+- keyboard bindings via xkb chords, named modes
+- layer shell (waybar, tofi, mako, …), exclusive-zone aware tiling;
+  launchers open on the focused screen
+- focus-aware borders, server-side decorations, explicit stacking
+- every command answers once applied, with a real error when it can't be
 
-What's not in 0.3.0 (planned later):
+Not yet (planned):
 
 - pointer bindings (interactive move/resize via the `op_*` requests)
 - per-tag layout-param overrides
-- multi-seat (currently first seat wins)
-- decoration surfaces beyond the single coloured border
+- multi-seat (first seat wins for focus)
 - custom layouts beyond master-stack
 
 ## Design
@@ -116,30 +114,37 @@ patching river upstream.
 
 ```
 crates/
-├── gharial-ipc/       shared IPC wire types (used by both binaries)
+├── gharial-ipc/       the whole control vocabulary, no dependencies:
+│                      wire format, Command grammar, Action, Placement,
+│                      Rule, WindowSelector, listings, typed Client
 ├── gharial/           the daemon
 │   ├── protocol/      vendored river-window-management-v1
 │   │                  + river-xkb-bindings-v1 + river-layer-shell-v1
+│   ├── examples/      testclient (deterministic e2e client), rust_init
 │   └── src/
 │       ├── main.rs            entry point
 │       ├── layout.rs          pure master-stack algorithm
-│       ├── wayland_proto.rs   generated bindings for all three protocols
-│       ├── state/             IPC-side parameter + border store + action sender
-│       ├── ipc/               Unix-socket server + per-verb handlers
+│       ├── settings/          layout + border parameters
+│       ├── bridge.rs          IPC threads → wayland thread envelopes
+│       ├── ipc/               Unix-socket server, one thread per client
 │       └── wm/                the wayland-thread state machine
-│           ├── sequence.rs        Phase enum + transition methods
 │           ├── world.rs           the central state struct
-│           ├── globals.rs         binds the three river globals + registry
-│           ├── windows.rs         per-window entry (incl. output assignment)
-│           ├── outputs.rs         per-output entry: tags, focus memory, name
-│           ├── seats.rs           per-seat entry + layer-shell focus + pointer
-│           ├── bindings.rs        xkb binding registry + mode-aware enable
-│           ├── modes.rs           active-mode tracking
-│           ├── tags.rs            tag bitmask + per-output visibility flush
-│           ├── render.rs          layout::compute → propose/borders/set_position
-│           ├── actions/           Action execution, split per concern
-│           └── dispatch/          Dispatch impls split per protocol interface
-└── gharialctl/        the CLI
+│           ├── commands.rs        IPC commands: answer, or queue for manage
+│           ├── placement.rs       defaults + rules + window commands
+│           ├── rules.rs           rule store and lifetimes
+│           ├── spatial.rs         directional neighbour picking
+│           ├── leases.rs          process-scoped output changes
+│           ├── waits.rs           `wait window`
+│           ├── ticker.rs          deadlines and process exits
+│           ├── procs.rs           /proc ancestry and liveness
+│           ├── windows.rs         per-window state
+│           ├── outputs.rs         per-output tags, focus memory, names
+│           ├── seats.rs, bindings.rs, modes.rs, tags.rs, focus.rs
+│           ├── render/            manage flush + render flush + stacking
+│           ├── actions/           action execution, per concern
+│           └── dispatch/          one Dispatch impl per protocol interface
+├── gharialctl/        the CLI
+└── scripts/e2e.sh     end-to-end tests in a headless nested river
 ```
 
 ## Building
@@ -195,8 +200,12 @@ gharialctl set border-color-unfocused 0x00C896FF
 # Bindings
 gharialctl bind Super+Q       close
 gharialctl bind Super+Return  spawn rio
-gharialctl bind Super+L       focus next
+gharialctl bind Super+H       focus left
+gharialctl bind Super+L       focus right
 gharialctl bind Super+1       tag focus 1
+
+# Rules
+gharialctl rule add app-id=pavucontrol float size 900x600 center
 
 # Multiple screens: focused screen gets new windows + keyboard.
 # Output geometry and pointer adjacency are configured outside gharial.
@@ -259,6 +268,46 @@ use gharial_ipc::config::Config;
 let config = Config::new().warp_pointer_on_output_focus(false);
 ```
 
+## Rules and scripted control
+
+Rules decide where a window goes the moment it appears — before its
+first frame, so it never flashes in the wrong place or at the wrong
+size:
+
+```sh
+gharialctl rule add app-id=pavucontrol float size 900x600 center
+gharialctl rule add app-id=firefox output DP-2 tags 2
+gharialctl rule add title='Picture-in-Picture' float sticky size 480x270 position -20,-20
+```
+
+Matchers: `app-id=GLOB`, `title=GLOB`, `pid=PID` (the process, its
+descendants, and its session). Placement keys: `output`, `tags`,
+`float`/`tile`, `fullscreen`, `sticky`, `lock`, `border`/`noborder`,
+`focus`/`nofocus`, `size WxH`, `position X,Y`, `center`,
+`geometry WxH+X+Y`. Positions are relative to the output's usable area;
+negative offsets count from the right/bottom.
+
+The same keys work on running windows and on `spawn`, which makes
+gharial scriptable from test harnesses and benchmarks:
+
+```sh
+# Launch a benchmark on DP-2, tag 9, fullscreen, without stealing focus;
+# show tag 9 there and allow tearing only while it runs.
+pid=$(gharialctl spawn --output DP-2 --tags 9 --fullscreen --nofocus --lock -- ./bench)
+gharialctl output view DP-2 9 until-exit "$pid"
+gharialctl output presentation DP-2 async until-exit "$pid"
+id=$(gharialctl wait window pid="$pid" --timeout 20s)   # placed at final size
+
+# Exact geometry for a screenshot.
+gharialctl window list "$id" | awk -F'\t' '{printf "%s,%s %sx%s\n", $13, $14, $15, $16}' | xargs -I{} grim -g {} out.png
+
+# Any window, any time.
+gharialctl window app-id=mpv sticky float size 640x360 position -10,-10
+```
+
+Rules added with `--until-exit PID` (and rules with a `pid=` matcher)
+disappear when that process exits; `oneshot` rules apply to one window.
+
 ## IPC
 
 The daemon listens at `$GHARIAL_SOCKET`, or
@@ -271,9 +320,23 @@ line of UTF-8 text in, one line back:
 ```
 
 Arguments containing whitespace can be double-quoted with `\\` and
-`\"` escapes. `gharialctl` handles quoting for you.
+`\"` escapes; multi-line bodies (listings) escape `\n`. `gharialctl`
+handles both. State-changing commands reply once the change has been
+applied; queries reply immediately. Every connection is served on its
+own thread, so `wait window` never holds up other clients.
 
 Run `gharialctl --help` for the full verb list.
+
+## Testing
+
+```sh
+cargo test --workspace
+cargo build && cargo build --example testclient && scripts/e2e.sh
+```
+
+`scripts/e2e.sh` starts a headless river with two virtual outputs,
+runs gharial in it, and drives it with `gharialctl` and the
+deterministic `testclient` — it never touches your running session.
 
 ## Protocol pin
 

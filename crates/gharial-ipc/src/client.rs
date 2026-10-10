@@ -13,11 +13,18 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::action::Action;
+use crate::action::{Action, BindingSpec, Direction};
 use crate::color::Color;
+use crate::command::{Command, ListFormat, DEFAULT_MODE};
+use crate::info::{parse_outputs, parse_windows, OutputInfo, WindowInfo};
 use crate::orientation::Orientation;
+use crate::output::Presentation;
+use crate::placement::Placement;
+use crate::rule::Rule;
+use crate::tags::TagSet;
 use crate::value::BoolValue;
-use crate::{send_one, Request, Response};
+use crate::window::{WindowOp, WindowSelector};
+use crate::wire::{send_with_timeout, Response, DEFAULT_REPLY_TIMEOUT};
 
 /// Outcome of any [`Client`] method.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -32,6 +39,8 @@ pub enum Error {
     Daemon(String),
     /// `wait_until_ready` ran out of time before the daemon answered.
     Timeout { socket: PathBuf, waited: Duration },
+    /// The request could not be built (bad chord, malformed reply, …).
+    Invalid(String),
 }
 
 impl fmt::Display for Error {
@@ -45,6 +54,7 @@ impl fmt::Display for Error {
                 socket.display(),
                 waited
             ),
+            Self::Invalid(msg) => write!(f, "invalid request: {msg}"),
         }
     }
 }
@@ -74,6 +84,9 @@ impl From<std::io::Error> for Error {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// State-changing calls return once the daemon has *applied* the change
+/// (not merely queued it), so a script can act on the result right away.
 #[derive(Debug, Clone)]
 pub struct Client {
     socket: PathBuf,
@@ -113,18 +126,17 @@ impl Client {
     /// Verify the daemon is reachable. Returns `Ok(())` if the socket
     /// answers `ok pong`.
     pub fn ping(&self) -> Result<()> {
-        self.send_expect_ok("ping", &[])?;
-        Ok(())
+        self.send(&Command::Ping).map(drop)
     }
 
     /// The daemon's own reported version string.
     pub fn version(&self) -> Result<String> {
-        self.send_expect_ok("version", &[])
+        self.send(&Command::Version)
     }
 
     /// All layout / border parameters as one `key=value;...` line.
     pub fn status(&self) -> Result<String> {
-        self.send_expect_ok("status", &[])
+        self.send(&Command::Status)
     }
 
     /// Block until the daemon answers a ping or `timeout` elapses.
@@ -197,14 +209,13 @@ impl Client {
 
     /// Read a single parameter as the daemon prints it.
     pub fn get(&self, key: &str) -> Result<String> {
-        self.send_expect_ok("get", &[key])
+        self.send(&Command::Get(key.to_string()))
     }
 
     /// `set <key> <value>` — escape hatch for keys not yet covered by a
     /// typed constructor.
     pub fn set(&self, key: &str, value: &str) -> Result<()> {
-        self.send_expect_ok("set", &[key, value])?;
-        Ok(())
+        self.raw("set", [key, value]).map(drop)
     }
 
     /// Send an arbitrary IPC verb — escape hatch for verbs the typed
@@ -214,9 +225,11 @@ impl Client {
     where
         S: AsRef<str>,
     {
-        let owned: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
-        let arg_refs: Vec<&str> = owned.iter().map(String::as_str).collect();
-        self.send_expect_ok(command, &arg_refs)
+        let req = crate::Request::new(
+            command,
+            args.into_iter().map(|s| s.as_ref().to_string()).collect(),
+        );
+        self.send_request(&req, DEFAULT_REPLY_TIMEOUT)
     }
 
     // ── Window management ────────────────────────────────────────────
@@ -230,24 +243,101 @@ impl Client {
     pub fn toggle_fullscreen(&self) -> Result<()> {
         self.execute(Action::ToggleFullscreen)
     }
-    pub fn focus(&self, dir: crate::action::Direction) -> Result<()> {
+    pub fn toggle_sticky(&self) -> Result<()> {
+        self.execute(Action::ToggleSticky)
+    }
+    pub fn focus(&self, dir: Direction) -> Result<()> {
         self.execute(Action::FocusDirection(dir))
     }
-    pub fn swap(&self, dir: crate::action::Direction) -> Result<()> {
+    pub fn swap(&self, dir: Direction) -> Result<()> {
         self.execute(Action::SwapDirection(dir))
     }
 
-    /// Fork-exec a detached child. Use the slice form to pass args:
-    /// `client.spawn("rio", &["-e", "nvim"])?`.
-    pub fn spawn<S>(&self, cmd: &str, args: &[S]) -> Result<()>
+    /// Fork-exec a detached child and return its pid. Use the slice form
+    /// to pass args: `client.spawn("rio", &["-e", "nvim"])?`.
+    pub fn spawn<S>(&self, cmd: &str, args: &[S]) -> Result<u32>
     where
         S: AsRef<str>,
     {
-        let mut tokens = Vec::with_capacity(args.len() + 1);
-        tokens.push(cmd);
-        tokens.extend(args.iter().map(AsRef::as_ref));
-        self.send_expect_ok("spawn", &tokens)?;
-        Ok(())
+        self.spawn_placed(Placement::default(), cmd, args)
+    }
+
+    /// Spawn a child whose first window (from it or any descendant) gets
+    /// `placement`. Returns the child's pid.
+    pub fn spawn_placed<S>(&self, placement: Placement, cmd: &str, args: &[S]) -> Result<u32>
+    where
+        S: AsRef<str>,
+    {
+        let action = Action::spawn_placed(placement, cmd, args.iter().map(AsRef::as_ref));
+        let body = self.send(&Command::Action(action))?;
+        parse_reply_number(&body)
+    }
+
+    /// Apply `op` to every window `selector` picks. Returns the ids of
+    /// the windows affected (an empty match is an error).
+    pub fn window(&self, selector: WindowSelector, op: WindowOp) -> Result<Vec<u64>> {
+        let body = self.send(&Command::Action(Action::Window { selector, op }))?;
+        body.lines()
+            .map(|line| {
+                line.trim()
+                    .parse()
+                    .map_err(|_| Error::Invalid(format!("unexpected window id {line:?}")))
+            })
+            .collect()
+    }
+
+    /// Apply a placement to the windows `selector` picks.
+    pub fn place(&self, selector: WindowSelector, placement: Placement) -> Result<Vec<u64>> {
+        self.window(selector, WindowOp::Place(placement))
+    }
+
+    /// Every window, or those `selector` picks.
+    pub fn windows(&self, selector: Option<WindowSelector>) -> Result<Vec<WindowInfo>> {
+        let body = self.send(&Command::ListWindows {
+            selector,
+            format: ListFormat::Tsv,
+        })?;
+        parse_windows(&body).map_err(Error::Invalid)
+    }
+
+    /// Block until a window matching `selector` is mapped at its final
+    /// size, returning its id. `new_only` ignores windows already mapped
+    /// when the wait begins.
+    pub fn wait_window(
+        &self,
+        selector: WindowSelector,
+        timeout: Duration,
+        new_only: bool,
+    ) -> Result<u64> {
+        let cmd = Command::WaitWindow {
+            selector,
+            timeout,
+            new_only,
+        };
+        let body = self.send_request(&cmd.to_request(), timeout + Duration::from_secs(5))?;
+        parse_reply_number(&body)
+    }
+
+    // ── Rules ────────────────────────────────────────────────────────
+
+    /// Install a window rule; returns its id. With `until_exit`, the
+    /// rule disappears when that process exits.
+    pub fn add_rule(&self, rule: Rule, until_exit: Option<u32>) -> Result<u64> {
+        let body = self.send(&Command::AddRule { rule, until_exit })?;
+        parse_reply_number(&body)
+    }
+
+    pub fn remove_rule(&self, id: u64) -> Result<()> {
+        self.send(&Command::RemoveRule(id)).map(drop)
+    }
+
+    pub fn clear_rules(&self) -> Result<()> {
+        self.send(&Command::ClearRules).map(drop)
+    }
+
+    /// Installed rules, one `ID<TAB>rule tokens` line each.
+    pub fn rules(&self) -> Result<String> {
+        self.send(&Command::ListRules)
     }
 
     // ── Tags ──────────────────────────────────────────────────────────
@@ -268,7 +358,7 @@ impl Client {
     // ── Outputs (screens) ────────────────────────────────────────────
 
     /// Switch the focused output by direction.
-    pub fn focus_output(&self, dir: crate::action::Direction) -> Result<()> {
+    pub fn focus_output(&self, dir: Direction) -> Result<()> {
         self.execute(Action::focus_output(dir))
     }
 
@@ -278,7 +368,7 @@ impl Client {
     }
 
     /// Move the focused window to another output by direction.
-    pub fn send_to_output(&self, dir: crate::action::Direction) -> Result<()> {
+    pub fn send_to_output(&self, dir: Direction) -> Result<()> {
         self.execute(Action::send_to_output(dir))
     }
 
@@ -293,104 +383,121 @@ impl Client {
         self.execute(Action::set_output_focus_warp(value.into()))
     }
 
-    /// One-line description of every output the daemon knows about
-    /// (name, geometry, active tags, and focused marker).
+    /// Show `tags` on `output` without moving focus. With `until_exit`
+    /// the previous view returns when that process exits.
+    pub fn view_output_tags(
+        &self,
+        output: &str,
+        tags: TagSet,
+        until_exit: Option<u32>,
+    ) -> Result<()> {
+        let mut action = Action::view_output_tags(output, tags);
+        if let Some(pid) = until_exit {
+            action = action.until_exit(pid);
+        }
+        self.execute(action)
+    }
+
+    /// Set `output`'s presentation mode, optionally only while
+    /// `until_exit` runs.
+    pub fn set_presentation(
+        &self,
+        output: &str,
+        mode: Presentation,
+        until_exit: Option<u32>,
+    ) -> Result<()> {
+        let mut action = Action::set_presentation(output, mode);
+        if let Some(pid) = until_exit {
+            action = action.until_exit(pid);
+        }
+        self.execute(action)
+    }
+
+    /// Every output the daemon knows about.
+    pub fn outputs(&self) -> Result<Vec<OutputInfo>> {
+        let body = self.send(&Command::ListOutputs {
+            format: ListFormat::Tsv,
+        })?;
+        parse_outputs(&body).map_err(Error::Invalid)
+    }
+
+    /// The `output list` text: one tab-separated line per output.
     pub fn list_outputs(&self) -> Result<String> {
-        self.send_expect_ok("output", &["list"])
+        self.send(&Command::ListOutputs {
+            format: ListFormat::Tsv,
+        })
     }
 
     // ── Bindings & modes ─────────────────────────────────────────────
 
     /// Install a binding under the default mode.
     pub fn bind(&self, chord: &str, action: Action) -> Result<()> {
-        self.bind_in_mode_inner(None, chord, action)
+        self.bind_in_mode(DEFAULT_MODE, chord, action)
     }
 
     /// Install a binding under a named mode (the mode is auto-registered
     /// if not yet known).
     pub fn bind_in_mode(&self, mode: &str, chord: &str, action: Action) -> Result<()> {
-        self.bind_in_mode_inner(Some(mode), chord, action)
+        let spec = BindingSpec::parse(chord).map_err(Error::Invalid)?;
+        self.send(&Command::Bind {
+            mode: mode.to_string(),
+            spec,
+            action,
+        })
+        .map(drop)
     }
 
     /// Remove a binding from the default mode.
     pub fn unbind(&self, chord: &str) -> Result<()> {
-        self.unbind_in_mode_inner(None, chord)
+        self.unbind_in_mode(DEFAULT_MODE, chord)
     }
 
     pub fn unbind_in_mode(&self, mode: &str, chord: &str) -> Result<()> {
-        self.unbind_in_mode_inner(Some(mode), chord)
+        let spec = BindingSpec::parse(chord).map_err(Error::Invalid)?;
+        self.send(&Command::Unbind {
+            mode: mode.to_string(),
+            spec,
+        })
+        .map(drop)
     }
 
     /// Switch the active binding mode.
     pub fn enter_mode(&self, name: &str) -> Result<()> {
-        self.send_expect_ok("mode", &[name])?;
-        Ok(())
+        self.execute(Action::enter_mode(name))
     }
 
     /// Return to the default mode.
     pub fn exit_mode(&self) -> Result<()> {
-        self.send_expect_ok("mode", &["exit"])?;
-        Ok(())
+        self.execute(Action::ExitMode)
     }
 
     // ── Action execution ─────────────────────────────────────────────
 
     /// Fire any [`Action`] directly — useful when scripting in a loop
     /// where the variant is computed dynamically.
-    ///
-    /// Equivalent to whatever specific method matches the variant —
-    /// `execute(Action::Close)` == `close()`, etc.
     pub fn execute(&self, action: Action) -> Result<()> {
-        let tokens = action.to_tokens();
-        let Some((command, args)) = tokens.split_first() else {
-            return Err(Error::Daemon(
-                "internal: action produced no tokens (Bind/Unbind aren't bindable)".into(),
-            ));
-        };
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        self.send_expect_ok(command, &arg_refs)?;
-        Ok(())
+        self.send(&Command::Action(action)).map(drop)
     }
 
-    // ── private helpers ──────────────────────────────────────────────
-
-    fn bind_in_mode_inner(&self, mode: Option<&str>, chord: &str, action: Action) -> Result<()> {
-        let action_tokens = action.to_tokens();
-        if action_tokens.is_empty() {
-            // Bind / Unbind / unknown — refuse client-side rather than
-            // sending an empty `bind` request.
-            return Err(Error::Daemon("action has no token encoding".into()));
-        }
-        let mut owned: Vec<String> = Vec::with_capacity(action_tokens.len() + 3);
-        if let Some(mode_name) = mode {
-            owned.push("--mode".into());
-            owned.push(mode_name.into());
-        }
-        owned.push(chord.into());
-        owned.extend(action_tokens);
-        let args: Vec<&str> = owned.iter().map(String::as_str).collect();
-        self.send_expect_ok("bind", &args)?;
-        Ok(())
+    /// Send any [`Command`] and return the daemon's `ok` body.
+    pub fn send(&self, command: &Command) -> Result<String> {
+        self.send_request(&command.to_request(), DEFAULT_REPLY_TIMEOUT)
     }
 
-    fn unbind_in_mode_inner(&self, mode: Option<&str>, chord: &str) -> Result<()> {
-        let mut owned: Vec<&str> = Vec::with_capacity(3);
-        if let Some(mode_name) = mode {
-            owned.push("--mode");
-            owned.push(mode_name);
-        }
-        owned.push(chord);
-        self.send_expect_ok("unbind", &owned)?;
-        Ok(())
-    }
-
-    fn send_expect_ok(&self, command: &str, args: &[&str]) -> Result<String> {
-        let req = Request::new(command, args.iter().map(|s| (*s).to_string()).collect());
-        match send_one(&self.socket, &req)? {
+    fn send_request(&self, req: &crate::Request, timeout: Duration) -> Result<String> {
+        match send_with_timeout(&self.socket, req, Some(timeout))? {
             Response::Ok(body) => Ok(body),
             Response::Err(msg) => Err(Error::Daemon(msg)),
         }
     }
+}
+
+/// Replies like `spawn`'s pid or `rule add`'s id lead with a number.
+fn parse_reply_number<T: std::str::FromStr>(body: &str) -> Result<T> {
+    body.split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| Error::Invalid(format!("expected a number in reply, got {body:?}")))
 }
 
 #[cfg(test)]

@@ -1,141 +1,146 @@
-//! Output (screen) actions: switch the focused output and send the
-//! focused window to another output.
+//! Output (screen) actions: focus a screen, send a window to one, show
+//! tags or change presentation on one — optionally only while a process
+//! runs.
 //!
 //! The focused output is where new windows appear, where tag commands
 //! apply, and where keyboard focus is restored. By default switching it
-//! also warps the pointer to that screen (unless it is already there);
-//! configuration can leave the pointer in place instead.
+//! also warps the pointer to that screen (unless it is already there).
 
+use gharial_ipc::{BoolValue, OutputTarget, Presentation, TagSet};
 use wayland_client::backend::ObjectId;
 use wayland_client::Proxy;
 
-use crate::action::Direction;
-use crate::layout::Rect;
-use crate::output::OutputTarget;
-use crate::value::BoolValue;
-
-use super::super::spatial::pick_neighbor;
+use super::super::leases::{Lease, Value};
+use super::super::placement::{move_to_output, resolve_output};
 use super::super::world::World;
-use super::focus::{clear_focus, focus_candidate, set_focus};
+use super::focus::{clear_focus, focus_candidate, focused_window, set_focus};
 use super::tag::apply_tag_change;
+use super::Outcome;
 
 /// `pointer_warp` needs river_seat_v1 version 3.
 const SEAT_WARP_SINCE: u32 = 3;
 
-/// Resolve an `output focus`/`output send` target to a live output.
-fn resolve_target(world: &World, target: &OutputTarget) -> Option<ObjectId> {
-    match target {
-        OutputTarget::Named(token) => world.outputs.resolve_named(token),
-        OutputTarget::Direction(Direction::Next) => world.outputs.cycle_from_focused(true),
-        OutputTarget::Direction(Direction::Prev) => world.outputs.cycle_from_focused(false),
-        OutputTarget::Direction(dir) => {
-            // Spatially nearest output in the given direction, using the
-            // same neighbour picker windows use.
-            let rects: Vec<(ObjectId, Rect)> = world
-                .outputs
-                .iter()
-                .filter(|o| o.has_dimensions())
-                .map(|o| (o.id(), o.rect()))
-                .collect();
-            let current_id = world.outputs.focused_id()?;
-            let current_rect = world.outputs.get(&current_id)?.rect();
-            pick_neighbor(&rects, &current_id, current_rect, *dir)
+fn resolve(world: &World, target: &OutputTarget) -> Result<ObjectId, String> {
+    resolve_output(world, target, None).ok_or_else(|| match target {
+        OutputTarget::Named(name) => format!("no output named {name}"),
+        OutputTarget::Direction(dir) => format!("no output to the {}", dir.as_str()),
+    })
+}
+
+pub fn focus_output(world: &mut World, target: &OutputTarget) -> Outcome {
+    let output = resolve(world, target)?;
+    focus_output_id(world, &output);
+    Ok(String::new())
+}
+
+/// Make `output` the focused screen, moving keyboard focus there (its
+/// remembered window, else its first visible one, else nothing).
+pub fn focus_output_id(world: &mut World, output: &ObjectId) {
+    if world.outputs.focused_id().as_ref() == Some(output) {
+        return;
+    }
+    world.outputs.set_focused(output);
+    if let Some(seat_id) = world.seats.primary().map(|s| s.id()) {
+        match focus_candidate(world) {
+            Some(id) => set_focus(world, &seat_id, &id),
+            None => clear_focus(world, &seat_id),
         }
     }
-}
-
-pub(in crate::wm) fn focus_output(world: &mut World, target: &OutputTarget) {
-    let Some(output_id) = resolve_target(world, target) else {
-        return;
-    };
-    if world.outputs.focused_id().as_ref() == Some(&output_id) {
-        return;
-    }
-    world.outputs.set_focused(&output_id);
-
-    // Move keyboard focus onto the new screen: remembered focus for its
-    // active tags first, stack order second, cleared if it is empty.
-    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
-        return;
-    };
-    match focus_candidate(world) {
-        Some(id) => set_focus(world, &seat_id, &id),
-        None => clear_focus(world, &seat_id),
-    }
-    if world.warp_pointer_on_output_focus {
-        warp_pointer_to_output(world, &output_id);
+    if world.settings.warp_on_output_focus {
+        warp_pointer_to_output(world, output);
     }
 }
 
-pub(in crate::wm) fn send_to_output(world: &mut World, target: &OutputTarget) {
-    let Some(output_id) = resolve_target(world, target) else {
-        return;
-    };
-    let Some(focused) = world.seats.primary().and_then(|s| s.focused.clone()) else {
-        return;
-    };
-    let active_tags = world
-        .outputs
-        .get(&output_id)
-        .map(|o| o.active_tags)
-        .unwrap_or(1);
-    let Some(entry) = world.windows.get_mut(&focused) else {
-        return;
-    };
-    if entry.output.as_ref() == Some(&output_id) {
-        return;
-    }
-    entry.output = Some(output_id);
-    // The window adopts the target screen's current view so "send to
-    // that screen" always means "visible on that screen".
-    entry.tags = active_tags;
-    // Force fresh geometry on the new output.
-    entry.proposed = None;
-    entry.position = None;
-    // Focus stays on the current screen; apply_tag_change refocuses it
-    // since the sent window is no longer visible here.
+pub fn send_to_output(world: &mut World, target: &OutputTarget) -> Outcome {
+    let focused = focused_window(world).ok_or("no focused window")?;
+    let from = world.windows.get(&focused).and_then(|w| w.output.clone());
+    let output = resolve_output(world, target, from.as_ref())
+        .ok_or_else(|| format!("no output {target}"))?;
+    move_to_output(world, &focused, &output, false);
+    // Focus stays on this screen; apply_tag_change refocuses it since
+    // the sent window is no longer visible here.
     apply_tag_change(world);
+    Ok(String::new())
 }
 
-/// Configure whether explicit output-focus actions move the pointer to
-/// the newly focused output.
-pub(in crate::wm) fn set_output_focus_warp(world: &mut World, value: BoolValue) {
-    world.warp_pointer_on_output_focus =
-        resolve_output_focus_warp(world.warp_pointer_on_output_focus, value);
-}
-
-fn resolve_output_focus_warp(current: bool, value: BoolValue) -> bool {
-    match value {
+pub fn set_output_focus_warp(world: &mut World, value: BoolValue) -> Outcome {
+    let current = world.settings.warp_on_output_focus;
+    world.settings.warp_on_output_focus = match value {
         BoolValue::On => true,
         BoolValue::Off => false,
         BoolValue::Toggle => !current,
+    };
+    Ok(format!(
+        "output-focus-warp={}",
+        world.settings.warp_on_output_focus
+    ))
+}
+
+/// Show `tags` on an output without touching which output (or window)
+/// has focus — unless it *is* the focused output, where keyboard focus
+/// follows the view like `tag focus` would.
+pub fn view_tags(
+    world: &mut World,
+    target: &OutputTarget,
+    tags: TagSet,
+    until_exit: Option<u32>,
+) -> Outcome {
+    let output = resolve(world, target)?;
+    let entry = world.outputs.get_mut(&output).ok_or("output vanished")?;
+    let previous = entry.active_tags;
+    entry.active_tags = tags.mask();
+    if let Some(pid) = until_exit {
+        world.leases.add(Lease {
+            pid,
+            output,
+            previous: Value::Tags(previous),
+            set: Value::Tags(tags.mask()),
+        });
+        super::super::ticker::arm(world);
     }
+    apply_tag_change(world);
+    Ok(String::new())
+}
+
+pub fn set_presentation(
+    world: &mut World,
+    target: &OutputTarget,
+    mode: Presentation,
+    until_exit: Option<u32>,
+) -> Outcome {
+    let output = resolve(world, target)?;
+    let entry = world.outputs.get_mut(&output).ok_or("output vanished")?;
+    let previous = entry.presentation;
+    entry.presentation = mode;
+    if let Some(pid) = until_exit {
+        world.leases.add(Lease {
+            pid,
+            output,
+            previous: Value::Presentation(previous),
+            set: Value::Presentation(mode),
+        });
+        super::super::ticker::arm(world);
+    }
+    Ok(String::new())
 }
 
 /// Warp the pointer to the centre of `output_id` unless it is already
 /// on that output. Requires seat v3; called from inside a manage
 /// sequence (pointer_warp is manage-restricted).
 fn warp_pointer_to_output(world: &mut World, output_id: &ObjectId) {
-    let Some(rect) = world.outputs.get(output_id).map(|o| o.rect()) else {
+    let Some(output) = world.outputs.get(output_id) else {
         return;
     };
+    let rect = output.rect();
     if rect.w == 0 || rect.h == 0 {
         return;
     }
-    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
+    let inside = |p: (i32, i32)| output.contains(p);
+    let Some(seat) = world.seats.primary_mut() else {
         return;
     };
-    let Some(seat) = world.seats.get_mut(&seat_id) else {
+    if seat.last_pointer.is_some_and(inside) {
         return;
-    };
-    if let Some((px, py)) = seat.last_pointer {
-        let inside = px >= rect.x
-            && px < rect.x + rect.w as i32
-            && py >= rect.y
-            && py < rect.y + rect.h as i32;
-        if inside {
-            return;
-        }
     }
     if seat.proxy.version() < SEAT_WARP_SINCE {
         return;
@@ -143,17 +148,4 @@ fn warp_pointer_to_output(world: &mut World, output_id: &ObjectId) {
     let center = (rect.x + rect.w as i32 / 2, rect.y + rect.h as i32 / 2);
     seat.proxy.pointer_warp(center.0, center.1);
     seat.last_pointer = Some(center);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn output_focus_warp_setting_handles_on_off_and_toggle() {
-        assert!(resolve_output_focus_warp(false, BoolValue::On));
-        assert!(!resolve_output_focus_warp(true, BoolValue::Off));
-        assert!(resolve_output_focus_warp(false, BoolValue::Toggle));
-        assert!(!resolve_output_focus_warp(true, BoolValue::Toggle));
-    }
 }

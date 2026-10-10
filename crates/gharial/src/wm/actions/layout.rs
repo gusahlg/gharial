@@ -1,21 +1,26 @@
-//! `Action::Layout` execution: route a parsed (key, args) tuple to the
-//! shared parameter store, then flag the layout cache dirty so the
-//! current manage sequence's flush picks up the new value.
+//! `Action::Layout`: route a (key, args) pair to the settings store and
+//! invalidate whatever depends on it.
 
 use super::super::world::World;
+use super::Outcome;
 
-pub(in crate::wm) fn apply_layout(world: &mut World, key: &str, args: &[String]) {
-    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    match world.shared.apply(key, &arg_refs) {
-        Ok(applied) if applied.changed => {
-            world.mark_layout_dirty();
-            // We're already inside a manage sequence; flush_manage right
-            // after this drain reads the new params directly. Clear the
-            // IPC-thread dirty flag so the ping handler doesn't request
-            // a redundant manage round-trip.
-            world.shared.take_dirty();
+pub fn apply_layout(world: &mut World, key: &str, args: &[String]) -> Outcome {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let applied = world.settings.apply(key, &args)?;
+    if applied.changed {
+        world.mark_layout_dirty();
+        if key.starts_with("border-") {
+            // Colours/width are part of every window's border; repaint.
+            for w in world.windows.iter_mut() {
+                w.borders_sent = None;
+            }
+            // The content rect is the slot inset by the border width.
+            for w in world.windows.iter_mut() {
+                if w.is_tiled() {
+                    w.proposed = None;
+                }
+            }
         }
-        Ok(_) => {}
-        Err(e) => eprintln!("gharial: layout {key}: {e}"),
     }
+    Ok(applied.summary)
 }

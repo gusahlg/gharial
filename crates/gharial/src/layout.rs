@@ -1,43 +1,7 @@
 //! Pure master-stack layout algorithm. No wayland or runtime dependencies —
 //! deliberately kept testable in isolation.
 
-use std::str::FromStr;
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Orientation {
-    /// Main area on the left, stack on the right.
-    Left,
-    /// Main area on the right, stack on the left.
-    Right,
-    /// Main area on top, stack on the bottom.
-    Top,
-    /// Main area on the bottom, stack on top.
-    Bottom,
-}
-
-impl Orientation {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Left => "left",
-            Self::Right => "right",
-            Self::Top => "top",
-            Self::Bottom => "bottom",
-        }
-    }
-}
-
-impl FromStr for Orientation {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, ()> {
-        match s {
-            "left" => Ok(Self::Left),
-            "right" => Ok(Self::Right),
-            "top" => Ok(Self::Top),
-            "bottom" => Ok(Self::Bottom),
-            _ => Err(()),
-        }
-    }
-}
+pub use gharial_ipc::Orientation;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Params {
@@ -67,12 +31,16 @@ impl Default for Params {
     }
 }
 
+/// Largest gap/padding accepted, in pixels. Anything bigger is a typo,
+/// and keeping it small keeps the i32 layout arithmetic far from overflow.
+pub const MAX_SPACING: u32 = 1000;
+
 impl Params {
     pub fn clamp(&mut self) {
         self.main_ratio = self.main_ratio.clamp(0.05, 0.95);
-        if self.main_count < 1 {
-            self.main_count = 1;
-        }
+        self.main_count = self.main_count.clamp(1, 1000);
+        self.gaps = self.gaps.min(MAX_SPACING);
+        self.outer_padding = self.outer_padding.min(MAX_SPACING);
     }
 }
 
@@ -437,6 +405,7 @@ mod tests {
 
     #[test]
     fn orientation_roundtrip() {
+        use std::str::FromStr;
         for o in [
             Orientation::Left,
             Orientation::Right,

@@ -1,10 +1,6 @@
-//! Focus-related actions and the seat-focus invariants.
+//! Keyboard focus: directional/stack focus actions and the invariants.
 //!
-//! Public to the parent module: `set_focus`, `clear_focus`, and
-//! `ensure_focus_invariant` — the wayland dispatch layer reaches into
-//! these. The rest is implementation detail.
-//!
-//! Focus and outputs are kept coherent from one place: `set_focus`
+//! Focus and outputs are kept coherent from one place: [`set_focus`]
 //! records the window in its output's focus memory *and* moves output
 //! focus to that output, so keyboard focus and the focused screen never
 //! disagree.
@@ -12,88 +8,137 @@
 use wayland_client::backend::ObjectId;
 
 use crate::action::Direction;
+use crate::layout::Rect;
 
 use super::super::focus::pick_candidate;
 use super::super::render;
 use super::super::spatial::pick_neighbor;
 use super::super::world::World;
+use super::output::focus_output_id;
+use super::Outcome;
 
-pub(in crate::wm) fn focus_direction(world: &mut World, dir: Direction) {
+/// The primary seat's focused window.
+pub fn focused_window(world: &World) -> Option<ObjectId> {
+    world.seats.primary().and_then(|s| s.focused.clone())
+}
+
+pub fn focus_direction(world: &mut World, dir: Direction) -> Outcome {
     if dir.is_spatial() {
-        focus_spatial(world, dir);
+        focus_spatial(world, dir)
     } else {
-        focus_stack(world, dir);
+        focus_stack(world, dir)
     }
 }
 
-/// Cycle focus through the stack order of the *focused output* — each
-/// screen cycles its own windows, exactly like the single-screen
-/// behaviour did.
-pub(in crate::wm) fn focus_stack(world: &mut World, dir: Direction) {
-    let visible = match world.outputs.focused_id() {
-        Some(output) => world.windows.visible_ids_on(&output),
-        None => world.windows.visible_ids(),
+/// Cycle focus through the stack order of the focused output.
+fn focus_stack(world: &mut World, dir: Direction) -> Outcome {
+    let Some(output) = world.outputs.focused_id() else {
+        return Err("no output".into());
     };
+    let visible = world.windows.visible_on(&output);
     if visible.is_empty() {
-        return;
+        return Ok(String::new());
     }
-    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
-        return;
-    };
-    let current = world.seats.get(&seat_id).and_then(|s| s.focused.clone());
-    let current_idx = current
-        .as_ref()
-        .and_then(|id| visible.iter().position(|other| other == id));
-    let new_idx = match (current_idx, dir) {
+    let current =
+        focused_window(world).and_then(|id| visible.iter().position(|other| *other == id));
+    let idx = match (current, dir) {
         (None, _) => 0,
-        (Some(i), Direction::Next) => (i + 1) % visible.len(),
         (Some(i), Direction::Prev) => (i + visible.len() - 1) % visible.len(),
-        // Spatial directions are handled by focus_spatial; this match
-        // arm exists so the compiler can't complain about exhaustiveness.
-        (Some(i), _) => i,
+        (Some(i), _) => (i + 1) % visible.len(),
     };
-    set_focus(world, &seat_id, &visible[new_idx]);
+    focus_window(world, &visible[idx]);
+    Ok(String::new())
 }
 
-/// Spatial focus works over *all* outputs' layout rects — walking focus
-/// off the right edge of one screen lands on the nearest window of the
-/// next screen, and output focus follows.
-fn focus_spatial(world: &mut World, dir: Direction) {
-    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
-        return;
-    };
-    let targets = render::targets_snapshot(world);
-    if targets.is_empty() {
-        return;
+/// What directional moves see: every visible window's on-screen rect,
+/// across all outputs. An output showing a fullscreen window contributes
+/// only that window (covering the output) — the windows hidden behind it
+/// are not reachable by direction.
+pub fn spatial_rects(world: &mut World) -> Vec<(ObjectId, Rect)> {
+    render::ensure_targets(world);
+    let mut covering: std::collections::HashMap<ObjectId, (u64, ObjectId)> = Default::default();
+    for w in world.windows.iter().filter(|w| w.visible && w.fullscreen) {
+        if let Some(out) = &w.output {
+            let slot = covering.entry(out.clone()).or_insert((w.raised, w.id()));
+            if w.raised >= slot.0 {
+                *slot = (w.raised, w.id());
+            }
+        }
     }
-    let current_id = world.seats.get(&seat_id).and_then(|s| s.focused.clone());
-    let Some(current_id) = current_id else {
-        // Nothing focused — pick any visible window. Reuse the stack
-        // path to avoid duplicating the "first visible" fallback.
-        focus_stack(world, Direction::Next);
-        return;
-    };
-    let Some(current_rect) = targets.get(&current_id).copied() else {
-        // Focused window has no layout rect (floating, or not yet sized).
-        // Fall back to stack-cycle in a sensible direction.
-        focus_stack(
-            world,
-            match dir {
-                Direction::Right | Direction::Down => Direction::Next,
-                _ => Direction::Prev,
-            },
-        );
-        return;
-    };
-    let rects: Vec<_> = targets.into_iter().collect();
-    if let Some(next) = pick_neighbor(&rects, &current_id, current_rect, dir) {
-        set_focus(world, &seat_id, &next);
+    let mut rects = Vec::new();
+    for w in world.windows.iter().filter(|w| w.visible && w.placed) {
+        let Some(out) = &w.output else { continue };
+        let rect = match covering.get(out) {
+            Some((_, top)) if *top == w.id() => world.outputs.get(out).map(|o| o.rect()),
+            Some(_) => None,
+            None if w.is_tiled() => world.targets.get(&w.id()),
+            None => w.content_rect(),
+        };
+        if let Some(rect) = rect {
+            rects.push((w.id(), rect));
+        }
     }
-    // No neighbour in that direction: deliberately no-op rather than
-    // wrap or jump. Avoids surprising focus jumps to the far side.
+    rects
 }
 
-pub(in crate::wm) fn set_focus(world: &mut World, seat_id: &ObjectId, window_id: &ObjectId) {
+/// Focus the window visually next to the focused one, across screens.
+/// With nothing in that direction, focus moves to the screen there (if
+/// any) — so `focus right` from an empty screen still gets you over.
+fn focus_spatial(world: &mut World, dir: Direction) -> Outcome {
+    let rects = spatial_rects(world);
+    let current = focused_window(world);
+    let origin = current
+        .as_ref()
+        .and_then(|id| rects.iter().find(|(r, _)| r == id))
+        .map(|(_, rect)| *rect)
+        .or_else(|| world.outputs.focused().map(|o| o.rect()));
+    let Some(origin) = origin else {
+        return Ok(String::new());
+    };
+
+    // Index-keyed so "no focused window" needs no sentinel ObjectId.
+    let indexed: Vec<(usize, Rect)> = rects
+        .iter()
+        .enumerate()
+        .map(|(i, (_, r))| (i, *r))
+        .collect();
+    let from = current
+        .as_ref()
+        .and_then(|id| rects.iter().position(|(r, _)| r == id))
+        .unwrap_or(usize::MAX);
+    let recency = |i: &usize| world.windows.get(&rects[*i].0).map_or(0, |w| w.focused_at);
+    if let Some(i) = pick_neighbor(&indexed, &from, origin, dir, recency) {
+        let target = rects[i].0.clone();
+        focus_window(world, &target);
+        return Ok(String::new());
+    }
+
+    // Nothing that way on any screen: hop to the screen in that
+    // direction (it may be empty).
+    let here = current
+        .as_ref()
+        .and_then(|id| world.windows.get(id))
+        .and_then(|w| w.output.clone())
+        .or_else(|| world.outputs.focused_id());
+    let next = super::super::placement::resolve_output(
+        world,
+        &gharial_ipc::OutputTarget::Direction(dir),
+        here.as_ref(),
+    );
+    if let Some(output) = next {
+        focus_output_id(world, &output);
+    }
+    Ok(String::new())
+}
+
+/// Give `window_id` keyboard focus on the primary seat (if it's visible).
+pub fn focus_window(world: &mut World, window_id: &ObjectId) {
+    if let Some(seat_id) = world.seats.primary().map(|s| s.id()) {
+        set_focus(world, &seat_id, window_id);
+    }
+}
+
+pub fn set_focus(world: &mut World, seat_id: &ObjectId, window_id: &ObjectId) {
     let Some(window) = world.windows.get(window_id) else {
         return;
     };
@@ -105,8 +150,18 @@ pub(in crate::wm) fn set_focus(world: &mut World, seat_id: &ObjectId, window_id:
     let Some(seat) = world.seats.get_mut(seat_id) else {
         return;
     };
+    // Always (re)send: after a layer surface releases keyboard focus the
+    // server's notion may differ from ours, and the request is cheap.
     seat.proxy.focus_window(&window.proxy);
     seat.focused = Some(window_id.clone());
+    let serial = world.next_serial();
+    if let Some(w) = world.windows.get_mut(window_id) {
+        w.focused_at = serial;
+        if w.floating || w.fullscreen {
+            w.raised = serial;
+            world.stacking_dirty = true;
+        }
+    }
     // Keyboard focus defines the focused screen: remember the window in
     // its output's per-tag memory and move output focus there.
     if let Some(output_id) = window_output {
@@ -119,66 +174,85 @@ pub(in crate::wm) fn set_focus(world: &mut World, seat_id: &ObjectId, window_id:
     }
 }
 
-pub(in crate::wm) fn clear_focus(world: &mut World, seat_id: &ObjectId) {
+pub fn clear_focus(world: &mut World, seat_id: &ObjectId) {
     if let Some(seat) = world.seats.get_mut(seat_id) {
-        seat.proxy.clear_focus();
-        seat.focused = None;
+        if seat.focused.take().is_some() {
+            seat.proxy.clear_focus();
+        }
     }
 }
 
 /// "Always something focused" invariant — if the seat's focused window
 /// has been closed or hidden, restore the focused output's remembered
 /// focus or fall back to the first visible window there. Clear focus
-/// only when the focused output has no visible windows. Called at the
-/// tail of every `manage_start` drain.
-pub(in crate::wm) fn ensure_focus_invariant(world: &mut World) {
+/// only when the focused output has no visible windows.
+pub fn ensure_focus_invariant(world: &mut World) {
     let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
         return;
     };
-    // Don't compete with layer surfaces: while a launcher / panel has
-    // keyboard focus (exclusive or non-exclusive), the protocol says
-    // a focus_window request during the same manage sequence cancels
-    // its focus. Skip — the layer surface needs to type.
-    let layer_active = world
+    // Don't compete with layer surfaces: while a launcher / panel holds
+    // keyboard focus, a focus_window request in the same manage
+    // sequence would cancel it.
+    if world
         .seats
         .get(&seat_id)
-        .is_some_and(|s| s.layer_focus_active);
-    if layer_active {
+        .is_some_and(|s| s.layer_has_exclusive_focus())
+    {
         return;
     }
-    let current = world.seats.get(&seat_id).and_then(|s| s.focused.clone());
-    let still_good = current
-        .as_ref()
-        .and_then(|id| world.windows.get(id))
+    let still_good = focused_window(world)
+        .and_then(|id| world.windows.get(&id))
         .is_some_and(|w| w.visible);
     if still_good {
         return;
     }
-    let next = focus_candidate(world);
-    match next {
+    match focus_candidate(world) {
         Some(id) => set_focus(world, &seat_id, &id),
         None => clear_focus(world, &seat_id),
     }
 }
 
-/// Best focus candidate on the focused output: its per-tag remembered
-/// focus first, then the first visible window in stack order.
-pub(in crate::wm) fn focus_candidate(world: &World) -> Option<ObjectId> {
-    let Some(output) = world.outputs.focused() else {
-        // No outputs — fall back to any visible window.
-        return world.windows.visible_ids().into_iter().next();
+/// Move focus off `id` to the next best window on the focused output.
+pub fn refocus_elsewhere(world: &mut World, id: &ObjectId) {
+    let Some(seat_id) = world.seats.primary().map(|s| s.id()) else {
+        return;
     };
+    let output = world.outputs.focused_id();
+    let next = output.and_then(|o| {
+        world
+            .windows
+            .visible_on(&o)
+            .into_iter()
+            .filter(|w| w != id)
+            .filter(|w| world.windows.get(w).is_some_and(|e| !e.no_auto_focus))
+            .max_by_key(|w| world.windows.get(w).map_or(0, |e| e.focused_at))
+    });
+    match next {
+        Some(next) => set_focus(world, &seat_id, &next),
+        None => clear_focus(world, &seat_id),
+    }
+}
+
+/// Best focus candidate on the focused output: its per-tag remembered
+/// focus first, then the first visible window in stack order. Both must
+/// still be visible *on that output* — a remembered window that moved to
+/// another screen must not drag focus over there.
+pub fn focus_candidate(world: &World) -> Option<ObjectId> {
+    let output = world.outputs.focused()?;
+    let output_id = output.id();
     let remembered = output.focus.candidates(output.active_tags);
-    let ordered = world.windows.visible_ids_on(&output.id());
-    pick_candidate(remembered, ordered, |id| world.windows.is_visible(id))
+    let ordered = world.windows.visible_on(&output_id);
+    pick_candidate(remembered, ordered, |id| {
+        world
+            .windows
+            .get(id)
+            .is_some_and(|w| w.visible && !w.no_auto_focus && w.output.as_ref() == Some(&output_id))
+    })
 }
 
 /// Forget a removed window in every output's focus memory.
-pub(in crate::wm) fn forget_window(world: &mut World, window_id: &ObjectId) {
-    let ids: Vec<ObjectId> = world.outputs.iter_ids().collect();
-    for id in ids {
-        if let Some(output) = world.outputs.get_mut(&id) {
-            output.focus.forget(window_id);
-        }
+pub fn forget_window(world: &mut World, window_id: &ObjectId) {
+    for output in world.outputs.iter_mut() {
+        output.focus.forget(window_id);
     }
 }

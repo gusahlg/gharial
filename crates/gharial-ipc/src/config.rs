@@ -51,7 +51,8 @@
 // shadow the two-parameter `std::result::Result` this module uses for
 // `try_new`. Reach for it as `gharial_ipc::Result`.)
 pub use crate::{
-    Action, BindingSpec, BoolValue, Client, Color, Direction, Error, Orientation, OutputTarget,
+    Action, BindingSpec, BoolValue, Client, Color, Direction, Error, Matcher, Orientation,
+    OutputTarget, Placement, Rule, TagSet,
 };
 
 /// Inclusive lower bound the daemon clamps `main-ratio` to.
@@ -313,8 +314,8 @@ impl Bindings {
 // ── Top-level config ─────────────────────────────────────────────────
 
 /// A whole config: layout/border parameters, output-focus behaviour,
-/// bindings, and autostart programs, applied in that order by
-/// [`Config::apply`]. Physical output layout belongs to the compositor's
+/// window rules, bindings, and autostart programs, applied in that order
+/// by [`Config::apply`]. Physical output layout belongs to the compositor's
 /// output manager (for example kanshi), not to gharial.
 ///
 /// This is sugar over applying a [`Layout`] and [`Bindings`] yourself —
@@ -324,6 +325,7 @@ pub struct Config {
     layout: Layout,
     bindings: Bindings,
     output_focus_warp: Option<bool>,
+    rules: Vec<Rule>,
     autostart: Vec<Vec<String>>,
 }
 
@@ -353,6 +355,19 @@ impl Config {
         self
     }
 
+    /// Add a window rule. Rules are installed before autostart programs
+    /// run, so they already apply to those programs' first windows.
+    pub fn rule(mut self, rule: Rule) -> Self {
+        self.rules.push(rule);
+        self
+    }
+
+    /// Add several window rules, in order.
+    pub fn rules(mut self, rules: impl IntoIterator<Item = Rule>) -> Self {
+        self.rules.extend(rules);
+        self
+    }
+
     /// Queue an autostart program (argv form: command first, then args).
     pub fn spawn<I, S>(mut self, argv: I) -> Self
     where
@@ -364,13 +379,16 @@ impl Config {
         self
     }
 
-    /// Apply the layout, output-focus warp setting, and bindings in that
-    /// order, then fire the autostart programs — stopping at the first
-    /// daemon error.
+    /// Apply the layout, output-focus warp setting, rules, and bindings in
+    /// that order, then fire the autostart programs — stopping at the
+    /// first daemon error.
     pub fn apply(&self, client: &Client) -> crate::Result<()> {
         self.layout.apply(client)?;
         if let Some(enabled) = self.output_focus_warp {
             client.set_output_focus_warp(enabled)?;
+        }
+        for rule in &self.rules {
+            client.add_rule(rule.clone(), None)?;
         }
         self.bindings.apply(client)?;
         for argv in &self.autostart {

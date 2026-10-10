@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Minimal master-stack layout daemon for the river Wayland compositor."
+description = "Minimal window manager for the river Wayland compositor."
 
 [[bin]]
 name = "gharial"
@@ -21,3 +21,7 @@ calloop-wayland-source = "0.4"
 bitflags = "2"
 # Spawned-child reaping (SIGCHLD = SIG_IGN), nothing else.
 libc = "0.2"
+
+[dev-dependencies]
+# xdg-shell bindings for the `testclient` example.
+wayland-protocols = { version = "0.32", features = ["client"] }

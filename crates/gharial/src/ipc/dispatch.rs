@@ -1,82 +1,55 @@
-//! Per-connection request handling. Reads exactly one line, parses it
-//! into an IPC `Request`, and writes back exactly one `Response` line.
+//! Per-connection request handling: read one line, parse it into a
+//! [`Command`], answer it, write one line back.
 //!
-//! The dispatch table is intentionally flat — adding a new verb means
-//! adding a new arm here and a function in [`super::handlers`].
+//! `ping` and `version` are answered right here, so `gharialctl wait`
+//! works even while the wayland thread is busy; everything else goes to
+//! the wayland thread through the [`Bridge`].
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, Write};
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
 
-use gharial_ipc::{Request, Response};
+use gharial_ipc::wire::read_line_bounded;
+use gharial_ipc::{Command, Request, Response};
 
-use crate::action::is_layout_key;
-use crate::state::Shared;
+use crate::bridge::Bridge;
 
-use super::handlers::{bind, layout, misc, mode, output, tag, window};
-use super::Notifier;
+/// How long a client may take to send its request line.
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) fn handle_client(
-    stream: UnixStream,
-    shared: &Shared,
-    notifier: Option<&Notifier>,
-) -> io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut line = String::new();
-    let n = reader.read_line(&mut line)?;
-    if n == 0 {
+/// How long the wayland thread gets to apply a command. Generous: a
+/// manage sequence can be held up by slow clients, but a healthy
+/// session answers in milliseconds.
+const APPLY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Extra time past a `wait-window` deadline before giving up on the
+/// wayland thread's own timeout reply.
+const WAIT_SLACK: Duration = Duration::from_secs(2);
+
+pub(super) fn handle_client(stream: UnixStream, bridge: &Bridge) -> io::Result<()> {
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let Some(line) = read_line_bounded(&stream)? else {
         return Ok(());
-    }
-    let (response, changed) = match Request::parse(line.trim_end_matches(['\r', '\n'])) {
-        Ok(req) => dispatch(req, shared),
-        Err(e) => (Response::err(e.to_string()), false),
     };
-    if changed {
-        if let Some(n) = notifier {
-            n();
-        }
-    }
+    let response = match Request::parse(line.trim_end_matches(['\r', '\n'])) {
+        Ok(req) => answer(&req, bridge),
+        Err(e) => Response::err(e.to_string()),
+    };
     let mut writer = stream;
     writer.write_all(response.encode().as_bytes())?;
-    writer.flush()?;
-    Ok(())
+    writer.flush()
 }
 
-fn dispatch(req: Request, shared: &Shared) -> (Response, bool) {
-    let args: Vec<&str> = req.args.iter().map(String::as_str).collect();
-    let cmd = req.command.as_str();
-    // Layout-param shorthands route directly to `apply` so users can run
-    // e.g. `gharialctl main-ratio +0.05` without the `set` prefix.
-    if is_layout_key(cmd) {
-        return layout::apply(shared, cmd, &args);
-    }
-    match cmd {
-        "set" => layout::set(shared, &args),
-        "get" => layout::get(shared, &args),
-        "status" => layout::status(shared),
-
-        // Window-management verbs that route through the action channel.
-        "close" => window::close(shared),
-        "toggle-float" => window::toggle_float(shared),
-        "toggle-fullscreen" | "fullscreen" => window::toggle_fullscreen(shared),
-        "focus" => window::focus(shared, &args),
-        "swap" => window::swap(shared, &args),
-        "spawn" => window::spawn(shared, &args),
-
-        // Bindings & modes.
-        "bind" => bind::bind(shared, &args),
-        "unbind" => bind::unbind(shared, &args),
-        "mode" => mode::mode(shared, &args),
-
-        // Tags.
-        "tag" => tag::tag(shared, &args),
-
-        // Outputs (screens).
-        "output" => output::output(shared, &args),
-
-        // Diagnostics.
-        "ping" => misc::ping(),
-        "version" => misc::version(),
-
-        cmd => (Response::err(format!("unknown command: {cmd}")), false),
+pub(super) fn answer(req: &Request, bridge: &Bridge) -> Response {
+    let command = match Command::parse(req) {
+        Ok(command) => command,
+        Err(e) => return Response::err(e),
+    };
+    match command {
+        Command::Ping => Response::ok("pong"),
+        Command::Version => Response::ok(env!("CARGO_PKG_VERSION")),
+        Command::WaitWindow { timeout, .. } => bridge.request(command, timeout + WAIT_SLACK),
+        command => bridge.request(command, APPLY_TIMEOUT),
     }
 }

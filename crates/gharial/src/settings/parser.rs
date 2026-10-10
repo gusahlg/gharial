@@ -1,10 +1,12 @@
 //! Pure command-grammar logic: take a `Params` plus a parsed command,
 //! mutate `Params`, or return a structured error message.
 //!
-//! No locks, no I/O. Tests for the grammar live alongside `Shared`
-//! because they exercise the locked entry point.
+//! No I/O. End-to-end grammar tests live in `settings::tests`, which
+//! drive it through `Settings::apply`.
 
-use crate::layout::{Orientation, Params};
+use gharial_ipc::Orientation;
+
+use crate::layout::Params;
 
 use super::{premultiply_straight, BorderConfig};
 
@@ -80,7 +82,7 @@ fn parse_color(raw: &str) -> Result<super::BorderColor, String> {
         .or_else(|| raw.strip_prefix("0X"))
         .or_else(|| raw.strip_prefix('#'))
         .unwrap_or(raw);
-    if hex.len() != 8 {
+    if hex.len() != 8 || !hex.is_ascii() {
         return Err(format!(
             "invalid color {raw}: expected 8 hex digits (RRGGBBAA)"
         ));
@@ -226,6 +228,8 @@ mod tests {
     fn parse_color_rejects_non_hex_bytes() {
         assert!(parse_color("0xZZ334455").is_err());
         assert!(parse_color("#GG112233").is_err());
+        // 8 bytes, but slicing at byte 2 would split the `é`.
+        assert!(parse_color("0xaé23456").is_err());
     }
 
     #[test]

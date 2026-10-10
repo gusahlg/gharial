@@ -1,8 +1,11 @@
-//! gharialctl: control tool for the gharial layout daemon.
+//! gharialctl: control tool for the gharial window manager.
 //!
-//! Responsibilities of `main` are deliberately narrow: parse the argv
-//! slice into (socket, command, args), pattern-match on `command`, and
-//! delegate everything else. Helpers live in sibling modules.
+//! `main` only parses the argv slice into (socket, command, args),
+//! handles the few client-side verbs, and forwards everything else to
+//! the daemon. Helpers live in sibling modules.
+//!
+//! Exit status: 0 success, 1 the daemon refused the request, 2 usage
+//! error, 3 the daemon could not be reached.
 
 mod args;
 mod usage;
@@ -11,19 +14,18 @@ mod wait;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use gharial_ipc::{send_one, Request, Response};
+use gharial_ipc::{send_with_timeout, Command, Request, Response};
 
 use crate::args::{parse_timeout, split_socket_flag};
 use crate::usage::usage;
 use crate::wait::wait_for_daemon;
 
+/// Reply timeout for ordinary requests (the daemon applies a command in
+/// one manage sequence; this only matters if it is wedged).
+const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
+
 fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    if raw.is_empty() {
-        usage(false);
-        return ExitCode::from(2);
-    }
-
     let (socket_override, rest) = match split_socket_flag(raw) {
         Ok(pair) => pair,
         Err(msg) => {
@@ -31,13 +33,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-
-    let (command, cmd_args) = match rest.split_first() {
-        Some((c, a)) => (c.clone(), a.to_vec()),
-        None => {
-            usage(false);
-            return ExitCode::from(2);
-        }
+    let Some((command, cmd_args)) = rest.split_first() else {
+        usage(false);
+        return ExitCode::from(2);
     };
 
     match command.as_str() {
@@ -54,14 +52,39 @@ fn main() -> ExitCode {
 
     let path = socket_override.unwrap_or_else(gharial_ipc::socket_path);
 
-    if command == "wait" {
-        let timeout =
-            parse_timeout(cmd_args.first().map(String::as_str)).unwrap_or(Duration::from_secs(2));
-        return wait_for_daemon(&path, timeout);
-    }
+    let req = match (command.as_str(), cmd_args) {
+        // `wait window …` blocks on a window; plain `wait` on the daemon.
+        ("wait", [sub, rest @ ..]) if sub == "window" => Request::new("wait-window", rest.to_vec()),
+        ("wait", rest) => {
+            let timeout = match rest.first() {
+                None => Duration::from_secs(2),
+                Some(raw) => match parse_timeout(Some(raw)) {
+                    Some(t) => t,
+                    None => {
+                        eprintln!(
+                            "gharialctl: wait: invalid timeout {raw:?} (e.g. 2000, 500ms, 5s)"
+                        );
+                        return ExitCode::from(2);
+                    }
+                },
+            };
+            return wait_for_daemon(&path, timeout);
+        }
+        _ => Request::new(command.clone(), cmd_args.to_vec()),
+    };
 
-    let req = Request::new(command, cmd_args);
-    match send_one(&path, &req) {
+    // Validate locally so typos fail without a round trip, and learn how
+    // long a `wait-window` may legitimately take.
+    let reply_timeout = match Command::parse(&req) {
+        Ok(Command::WaitWindow { timeout, .. }) => timeout + Duration::from_secs(5),
+        Ok(_) => REPLY_TIMEOUT,
+        Err(msg) => {
+            eprintln!("gharialctl: {msg}");
+            return ExitCode::from(2);
+        }
+    };
+
+    match send_with_timeout(&path, &req, Some(reply_timeout)) {
         Ok(Response::Ok(body)) => {
             if !body.is_empty() {
                 println!("{body}");
@@ -78,7 +101,7 @@ fn main() -> ExitCode {
                  (is the daemon running? try: pgrep -a gharial)",
                 path.display()
             );
-            ExitCode::from(1)
+            ExitCode::from(3)
         }
     }
 }

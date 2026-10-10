@@ -1,32 +1,37 @@
-//! Mode-related actions: enter/exit a binding mode, install/uninstall
-//! bindings. Mode-entry validates against the set of known modes to
-//! prevent soft-locking the keyboard with a typoed name.
+//! Mode actions and binding definitions. Entering a mode validates it
+//! against the bindings that exist, so a typo can't soft-lock the
+//! keyboard.
 
 use crate::action::{Action, BindingSpec};
 
-use super::super::bindings::{install_binding, refresh_mode_enables};
+use super::super::modes::DEFAULT_MODE;
 use super::super::world::World;
+use super::Outcome;
 
-pub(in crate::wm) fn enter_mode(world: &mut World, name: String) {
-    if !world.modes.is_known(&name) {
-        // Refuse rather than soft-lock: an unknown mode would disable
-        // every binding (none would match), leaving the user with no
-        // keyboard to escape with. Log and keep the current mode.
-        eprintln!(
-            "gharial: mode {name:?} has no bindings — refusing to switch (would soft-lock the keyboard)"
-        );
-        return;
+pub fn enter_mode(world: &mut World, name: &str) -> Outcome {
+    if name != DEFAULT_MODE && !world.bindings.has_mode(name) {
+        // An unknown mode would disable every binding (none match),
+        // leaving no key to get back out with.
+        return Err(format!(
+            "mode {name:?} has no bindings — refusing to switch (would soft-lock the keyboard)"
+        ));
     }
-    world.modes.active = name;
-    refresh_mode_enables(world);
+    if world.modes.active != name {
+        world.modes.active = name.to_string();
+        world.bindings.dirty = true;
+    }
+    Ok(String::new())
 }
 
-pub(in crate::wm) fn bind(world: &mut World, spec: BindingSpec, action: Action, mode: String) {
-    if let Err(e) = install_binding(world, spec, action, mode) {
-        eprintln!("gharial: bind failed: {e}");
-    }
+pub fn bind(world: &mut World, mode: String, spec: BindingSpec, action: Action) -> Outcome {
+    world.bindings.define(mode, spec, action);
+    Ok(String::new())
 }
 
-pub(in crate::wm) fn unbind(world: &mut World, spec: &BindingSpec, mode: &str) {
-    world.bindings.remove(spec, mode);
+pub fn unbind(world: &mut World, mode: &str, spec: &BindingSpec) -> Outcome {
+    if world.bindings.undefine(mode, spec) {
+        Ok(String::new())
+    } else {
+        Err(format!("no such binding in mode {mode:?}"))
+    }
 }

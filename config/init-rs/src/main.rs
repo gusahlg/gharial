@@ -1,18 +1,21 @@
 //! Rust-based gharial init.
 //!
-//! This is an executable River init: it starts gharial, waits for its IPC
-//! socket, applies the typed desktop policy, and then waits on the daemon so
-//! River keeps the session alive. Configuration errors tear the daemon down
-//! before the init exits, avoiding an orphaned compositor client.
+//! An executable River init: it starts gharial, applies the typed desktop
+//! policy, runs autostart programs once, and keeps gharial running for
+//! the life of the session — restarting it (and re-applying the policy)
+//! if it ever crashes, since River lets a new window manager adopt every
+//! open window. See [`daemon`] for the restart policy.
 
+mod daemon;
 mod desktop;
 
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
-use std::{env, process};
+use std::env;
+use std::process::{self, Command};
+use std::time::Duration;
 
-use gharial_ipc::{socket_path, Client};
+use gharial_ipc::Client;
+
+use crate::daemon::{Daemon, Supervisor};
 
 fn main() {
     if let Err(error) = run() {
@@ -25,18 +28,28 @@ fn run() -> Result<(), String> {
     set_session_environment();
     propagate_environment();
 
-    let client = Client::with_socket(socket_path());
-    let mut daemon = Daemon::spawn()?;
-    wait_for_daemon(&client, Duration::from_secs(5))?;
-
-    desktop::configure(&client)?;
-
-    // River owns the session lifetime. Once gharial exits, let this init exit
-    // too so River can tear the session down normally.
-    daemon
-        .wait()
-        .map(|_| ())
-        .map_err(|error| format!("failed waiting for gharial: {error}"))
+    let client = Client::new();
+    let mut supervisor = Supervisor::default();
+    let mut autostarted = false;
+    loop {
+        let mut daemon = Daemon::spawn()?;
+        match client.wait_until_ready(Duration::from_secs(10)) {
+            Ok(()) => {
+                // A policy mistake must not cost the session: report it
+                // and keep the daemon (and every open window) running.
+                if let Err(error) = desktop::configure(&client) {
+                    eprintln!("gharial-init-rs: applying the desktop policy: {error}");
+                }
+                if !autostarted {
+                    desktop::autostart(&client);
+                    autostarted = true;
+                }
+            }
+            Err(error) => eprintln!("gharial-init-rs: {error}"),
+        }
+        let status = daemon.wait()?;
+        supervisor.should_restart(status)?;
+    }
 }
 
 fn set_session_environment() {
@@ -61,55 +74,4 @@ fn propagate_environment() {
         .args(["--user", "import-environment"])
         .args(vars)
         .status();
-}
-
-struct Daemon(Option<Child>);
-
-impl Daemon {
-    fn spawn() -> Result<Self, String> {
-        let daemon = env::var_os("GHARIAL_DAEMON").unwrap_or_else(|| "gharial".into());
-        Command::new(daemon)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map(|child| Self(Some(child)))
-            .map_err(|error| format!("failed to start gharial: {error}"))
-    }
-
-    fn wait(&mut self) -> std::io::Result<ExitStatus> {
-        self.0
-            .take()
-            .expect("daemon child is present until wait")
-            .wait()
-    }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let Some(child) = self.0.as_mut() else {
-            return;
-        };
-        // Configuration failure must not leave a daemon running after River
-        // has rejected this init. Ignore races with a child that exited first.
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
-fn wait_for_daemon(client: &Client, timeout: Duration) -> Result<(), String> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if client.ping().is_ok() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "daemon at {} did not answer within {:?}",
-                client.socket().display(),
-                timeout
-            ));
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
 }

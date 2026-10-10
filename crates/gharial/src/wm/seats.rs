@@ -16,15 +16,10 @@ pub struct SeatEntry {
     /// Window the WM has told the compositor this seat should focus.
     /// `None` after `clear_focus`, or before any explicit focus.
     pub focused: Option<ObjectId>,
-    /// Last window the pointer entered; useful for click-to-focus
-    /// policies, currently informational only.
-    pub pointer_over: Option<ObjectId>,
     /// Layer-shell focus tracker for this seat.
     pub layer_shell: Option<RiverLayerShellSeatV1>,
-    /// `true` while a layer surface holds keyboard focus (exclusive
-    /// or non-exclusive). While set, gharial leaves seat focus alone
-    /// so launchers like tofi can actually receive input.
-    pub layer_focus_active: bool,
+    /// Which kind of keyboard focus a layer surface holds, if any.
+    pub layer_focus: LayerFocus,
     /// Last pointer position reported via `pointer_position`, in the
     /// compositor's global logical coordinates. Used to avoid redundant
     /// pointer warps during explicit output-focus changes.
@@ -37,9 +32,8 @@ impl SeatEntry {
             proxy,
             wl_seat_name: None,
             focused: None,
-            pointer_over: None,
             layer_shell: None,
-            layer_focus_active: false,
+            layer_focus: LayerFocus::None,
             last_pointer: None,
         }
     }
@@ -47,6 +41,22 @@ impl SeatEntry {
     pub fn id(&self) -> ObjectId {
         self.proxy.id()
     }
+
+    /// A launcher holds exclusive focus: the server ignores focus
+    /// requests, and making one would only fight it — leave focus alone.
+    pub fn layer_has_exclusive_focus(&self) -> bool {
+        self.layer_focus == LayerFocus::Exclusive
+    }
+}
+
+/// Layer-shell keyboard focus on a seat. With `NonExclusive` (on-demand
+/// panels) the window manager stays in control and may move focus away;
+/// with `Exclusive` (launchers) focus requests are ignored until it ends.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LayerFocus {
+    None,
+    Exclusive,
+    NonExclusive,
 }
 
 #[derive(Default)]
@@ -66,6 +76,11 @@ impl Seats {
 
     pub fn primary(&self) -> Option<&SeatEntry> {
         self.order.first().and_then(|id| self.by_id.get(id))
+    }
+
+    pub fn primary_mut(&mut self) -> Option<&mut SeatEntry> {
+        let id = self.order.first()?.clone();
+        self.by_id.get_mut(&id)
     }
 
     /// Iterate over the seat IDs in insertion order — used by dispatch

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Control tool for the gharial layout daemon."
+description = "Control tool for the gharial window manager."
 
 [[bin]]
 name = "gharialctl"

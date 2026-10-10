@@ -1,12 +1,13 @@
-//! Keyboard binding storage and lifecycle.
+//! Keyboard bindings: definitions, and their per-seat protocol objects.
 //!
-//! A binding is an (mode, chord) pair plus the action to fire. The
-//! compositor receives the actual key events; we register the
-//! river_xkb_binding_v1 proxies and the protocol calls us back via
-//! `pressed`/`released`. Only bindings whose `mode` matches the active
-//! mode are `enable()`d at any moment.
+//! A definition is a (mode, chord) → action entry and exists whether or
+//! not any seat does — a `bind` issued before river announces a seat is
+//! kept, not dropped. [`sync`] materialises one `river_xkb_binding_v1`
+//! per (seat, definition) and enables exactly those in the active mode.
+//! It runs inside a manage sequence (enable/disable are manage-bucket)
+//! whenever definitions, the active mode, or the seat set change.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wayland_client::backend::ObjectId;
 use wayland_client::Proxy;
@@ -17,101 +18,116 @@ use crate::wayland_proto::RiverXkbBindingV1;
 
 use super::world::World;
 
-#[derive(Debug)]
-pub struct BindingEntry {
-    pub spec: BindingSpec,
-    pub action: Action,
-    pub mode: String,
-    pub proxy: RiverXkbBindingV1,
-    pub enabled: bool,
+pub type Key = (String, BindingSpec);
+
+struct Bound {
+    seat: ObjectId,
+    key: Key,
+    proxy: RiverXkbBindingV1,
+    enabled: bool,
 }
 
 #[derive(Default)]
 pub struct Bindings {
-    by_proxy: HashMap<ObjectId, BindingEntry>,
-    by_key: HashMap<(String, BindingSpec), ObjectId>,
+    defs: HashMap<Key, Action>,
+    bound: HashMap<ObjectId, Bound>,
+    /// Definitions, mode switches, or seats changed since the last sync.
+    pub dirty: bool,
 }
 
 impl Bindings {
-    pub fn get_by_proxy(&self, id: &ObjectId) -> Option<&BindingEntry> {
-        self.by_proxy.get(id)
+    /// Add or replace a definition (last bind wins).
+    pub fn define(&mut self, mode: String, spec: BindingSpec, action: Action) {
+        self.defs.insert((mode, spec), action);
+        self.dirty = true;
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut BindingEntry> {
-        self.by_proxy.values_mut()
+    /// Remove a definition; `false` if there was none.
+    pub fn undefine(&mut self, mode: &str, spec: &BindingSpec) -> bool {
+        let removed = self
+            .defs
+            .remove(&(mode.to_string(), spec.clone()))
+            .is_some();
+        self.dirty |= removed;
+        removed
     }
 
-    pub fn insert(&mut self, entry: BindingEntry) {
-        let proxy_id = entry.proxy.id();
-        let key = (entry.mode.clone(), entry.spec.clone());
-        // Replace an existing binding silently — last-bind wins.
-        if let Some(old_id) = self.by_key.insert(key.clone(), proxy_id.clone()) {
-            if let Some(old) = self.by_proxy.remove(&old_id) {
-                old.proxy.destroy();
-            }
-        }
-        self.by_proxy.insert(proxy_id, entry);
+    /// The action a triggered binding object stands for.
+    pub fn action_for(&self, proxy: &ObjectId) -> Option<&Action> {
+        self.defs.get(&self.bound.get(proxy)?.key)
     }
 
-    pub fn remove(&mut self, spec: &BindingSpec, mode: &str) -> Option<BindingEntry> {
-        let key = (mode.to_string(), spec.clone());
-        let id = self.by_key.remove(&key)?;
-        let entry = self.by_proxy.remove(&id)?;
-        entry.proxy.destroy();
-        Some(entry)
+    /// Whether any binding lives in `mode` — entering a mode with none
+    /// would disable every key with no way back.
+    pub fn has_mode(&self, mode: &str) -> bool {
+        self.defs.keys().any(|(m, _)| m == mode)
     }
 }
 
-/// Install a fresh binding on the primary seat. The binding's `enable`
-/// happens only if its mode matches the active mode — otherwise it
-/// sits dormant until the user enters that mode.
-pub fn install_binding(
-    world: &mut World,
-    spec: BindingSpec,
-    action: Action,
-    mode: String,
-) -> Result<(), String> {
-    let seat = world
-        .seats
-        .primary()
-        .ok_or("no seat available — wait for compositor to advertise one")?;
-    let modifiers = Modifiers::from_bits_truncate(spec.modifiers);
-    let proxy =
-        world
-            .globals
-            .xkb
-            .get_xkb_binding(&seat.proxy, spec.keysym, modifiers, &world.qh, ());
-    let mut entry = BindingEntry {
-        spec,
-        action,
-        mode,
-        proxy,
-        enabled: false,
-    };
-    if entry.mode == world.modes.active {
-        entry.proxy.enable();
-        entry.enabled = true;
+/// Reconcile binding objects with definitions, seats, and the active
+/// mode. Must run inside a manage sequence.
+pub fn sync(world: &mut World) {
+    if !world.bindings.dirty {
+        return;
     }
-    // Make the mode reachable: register it so a later `mode <name>`
-    // request doesn't get refused as "unknown".
-    world.modes.register(&entry.mode);
-    world.bindings.insert(entry);
-    Ok(())
-}
-
-/// Reconcile every binding's `enabled` state with the active mode.
-/// Called from `EnterMode` / `ExitMode`. Must run inside a manage
-/// sequence (enable/disable are manage-bucket).
-pub fn refresh_mode_enables(world: &mut World) {
+    world.bindings.dirty = false;
+    let seats: HashSet<ObjectId> = world.seats.iter_ids().collect();
     let active = world.modes.active.clone();
-    for entry in world.bindings.iter_mut() {
-        let want = entry.mode == active;
-        if want && !entry.enabled {
-            entry.proxy.enable();
-            entry.enabled = true;
-        } else if !want && entry.enabled {
-            entry.proxy.disable();
-            entry.enabled = false;
+    let bindings = &mut world.bindings;
+
+    // Drop objects whose seat or definition is gone.
+    bindings.bound.retain(|_, b| {
+        let keep = seats.contains(&b.seat) && bindings.defs.contains_key(&b.key);
+        if !keep {
+            b.proxy.destroy();
+        }
+        keep
+    });
+
+    // Create missing objects.
+    let have: HashSet<(ObjectId, Key)> = bindings
+        .bound
+        .values()
+        .map(|b| (b.seat.clone(), b.key.clone()))
+        .collect();
+    for seat_id in &seats {
+        let Some(seat) = world.seats.get(seat_id) else {
+            continue;
+        };
+        for key in bindings.defs.keys() {
+            if have.contains(&(seat_id.clone(), key.clone())) {
+                continue;
+            }
+            let modifiers = Modifiers::from_bits_truncate(key.1.modifiers);
+            let proxy = world.globals.xkb.get_xkb_binding(
+                &seat.proxy,
+                key.1.keysym,
+                modifiers,
+                &world.qh,
+                (),
+            );
+            bindings.bound.insert(
+                proxy.id(),
+                Bound {
+                    seat: seat_id.clone(),
+                    key: key.clone(),
+                    proxy,
+                    enabled: false,
+                },
+            );
+        }
+    }
+
+    // Enable exactly the active mode.
+    for b in bindings.bound.values_mut() {
+        let want = b.key.0 == active;
+        if want != b.enabled {
+            if want {
+                b.proxy.enable();
+            } else {
+                b.proxy.disable();
+            }
+            b.enabled = want;
         }
     }
 }

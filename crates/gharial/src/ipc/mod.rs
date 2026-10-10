@@ -1,50 +1,50 @@
-//! Unix-socket IPC server for gharialctl.
+//! Unix-socket IPC server for gharialctl and Rust clients.
 //!
-//! Runs on a dedicated thread. Each connection is one request and one
-//! response line. Connection handling delegates to [`dispatch`].
+//! The accept loop runs on its own thread and hands every connection to
+//! a short-lived worker thread, so a blocking `wait-window` never holds
+//! up other clients. Each connection is one request line and one
+//! response line; [`dispatch`] parses the request and forwards it across
+//! the [`Bridge`] to the wayland thread.
 
 mod dispatch;
-mod handlers;
 
 #[cfg(test)]
 mod tests;
 
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::Duration;
 
-use crate::state::Shared;
+use gharial_ipc::Response;
 
-/// Callback invoked after a request applies a real state change. Used
-/// by the wayland thread to wake itself and refresh the layout. The
-/// IPC layer treats this as an opaque "something changed" notifier;
-/// it deliberately does not know about calloop.
-pub type Notifier = Arc<dyn Fn() + Send + Sync>;
+use crate::bridge::Bridge;
+
+/// Connections served at once. Beyond this a client gets an immediate
+/// `err busy` instead of a thread — enough headroom for scripts that
+/// fire many requests in parallel, small enough to bound resource use
+/// if something hammers the socket.
+const MAX_CONNECTIONS: usize = 64;
 
 pub struct Server {
     pub socket_path: PathBuf,
-    _handle: JoinHandle<()>,
 }
 
 impl Server {
     /// Bind the socket at the default path and spawn the accept loop.
-    /// `notifier` is invoked from the IPC thread whenever a request
-    /// applies a real state change; the wayland thread uses that to
-    /// schedule a layout refresh.
-    pub fn start_with_notifier(shared: Shared, notifier: Notifier) -> io::Result<Self> {
-        Self::start_at(gharial_ipc::socket_path(), shared, Some(notifier))
+    pub fn start(bridge: Bridge) -> io::Result<Self> {
+        Self::start_at(gharial_ipc::socket_path(), bridge)
     }
 
-    /// Bind the socket at an explicit path. Used for tests.
-    pub fn start_at(path: PathBuf, shared: Shared, notifier: Option<Notifier>) -> io::Result<Self> {
+    /// Bind the socket at an explicit path.
+    pub fn start_at(path: PathBuf, bridge: Bridge) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-
         if path.exists() {
             if probe(&path) {
                 return Err(io::Error::new(
@@ -52,23 +52,18 @@ impl Server {
                     format!("another gharial daemon is listening on {}", path.display()),
                 ));
             }
+            // A stale socket from a crashed daemon.
             std::fs::remove_file(&path).ok();
         }
 
         let listener = UnixListener::bind(&path)?;
-        let perm = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&path, perm)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
 
-        let socket_path = path.clone();
-        let handle = thread::Builder::new()
+        thread::Builder::new()
             .name("gharial-ipc".into())
-            .spawn(move || run(listener, shared, notifier))
-            .expect("spawn ipc thread");
+            .spawn(move || accept_loop(listener, bridge))?;
 
-        Ok(Self {
-            socket_path,
-            _handle: handle,
-        })
+        Ok(Self { socket_path: path })
     }
 }
 
@@ -78,22 +73,51 @@ impl Drop for Server {
     }
 }
 
-fn run(listener: UnixListener, shared: Shared, notifier: Option<Notifier>) {
+fn accept_loop(listener: UnixListener, bridge: Bridge) {
+    let active = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
-        match incoming {
-            Ok(stream) => {
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-                if let Err(e) = dispatch::handle_client(stream, &shared, notifier.as_ref()) {
-                    eprintln!("gharial: ipc client error: {e}");
-                }
-            }
+        let stream = match incoming {
+            Ok(stream) => stream,
             Err(e) => {
                 eprintln!("gharial: ipc accept error: {e}");
                 thread::sleep(Duration::from_millis(50));
+                continue;
             }
+        };
+        if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+            active.fetch_sub(1, Ordering::AcqRel);
+            refuse(stream, "busy: too many concurrent requests, retry");
+            continue;
+        }
+        let bridge = bridge.clone();
+        let guard = ActiveGuard(active.clone());
+        let spawned = thread::Builder::new()
+            .name("gharial-ipc-conn".into())
+            .spawn(move || {
+                let _guard = guard;
+                if let Err(e) = dispatch::handle_client(stream, &bridge) {
+                    eprintln!("gharial: ipc client error: {e}");
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("gharial: cannot spawn ipc worker: {e}");
         }
     }
+}
+
+/// Decrements the active-connection count when a worker finishes (or
+/// when its closure is dropped because the spawn failed).
+struct ActiveGuard(Arc<AtomicUsize>);
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn refuse(mut stream: UnixStream, message: &str) {
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+    let _ = stream.write_all(Response::err(message).encode().as_bytes());
 }
 
 /// Try to connect to an existing socket to detect a live peer.

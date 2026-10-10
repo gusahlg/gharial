@@ -48,15 +48,26 @@ gharialctl bind "$mod+D"      spawn rio -e nvim "$HOME/DOCUMENTATION.txt"
 gharialctl bind "$mod+F"      toggle-fullscreen
 
 # ─── Focus and swap ─────────────────────────────────────────────────
-gharialctl bind "$mod+H"        focus prev
-gharialctl bind "$mod+L"        focus next
-gharialctl bind "$mod+K"        focus prev
-gharialctl bind "$mod+J"        focus next
+# Directional: the window you see in that direction, across screens;
+# past the last window, the screen there. Shift swaps (or carries the
+# window to the next screen at an edge).
+gharialctl bind "$mod+H"        focus left
+gharialctl bind "$mod+L"        focus right
+gharialctl bind "$mod+K"        focus up
+gharialctl bind "$mod+J"        focus down
 
-gharialctl bind "$mod+Shift+H"  swap prev
-gharialctl bind "$mod+Shift+L"  swap next
-gharialctl bind "$mod+Shift+K"  swap prev
-gharialctl bind "$mod+Shift+J"  swap next
+gharialctl bind "$mod+Shift+H"  swap left
+gharialctl bind "$mod+Shift+L"  swap right
+gharialctl bind "$mod+Shift+K"  swap up
+gharialctl bind "$mod+Shift+J"  swap down
+
+gharialctl bind "$mod+S"        toggle-sticky
+
+# ─── Window rules ───────────────────────────────────────────────────
+# Applied as a matching window opens, before its first frame. Dialogs
+# and fixed-size windows float on their own.
+gharialctl rule add app-id=pavucontrol float size 900x600 center
+gharialctl rule add title=Picture-in-Picture float sticky size 640x360 position -20,-20
 
 # ─── Tags (workspaces 1-10; '0' key targets tag 10) ─────────────────
 for i in 1 2 3 4 5 6 7 8 9 10; do

@@ -1,27 +1,22 @@
-//! gharial: a minimal master-stack layout generator for the river
-//! Wayland compositor.
+//! gharial: a window manager for the river Wayland compositor.
 //!
 //! The binary entry point lives here; the public Rust API (`Action`,
-//! `Client`, …) lives in the `gharial` library crate alongside this
-//! binary. The wire-format vocabulary is shared, so re-exporting the
-//! lib modules at this crate root keeps daemon-internal call sites
-//! using `crate::action::*` / `crate::keysyms::*` paths unchanged.
+//! `Client`, …) lives in the `gharial` library crate alongside it. The
+//! wire vocabulary is shared, so re-exporting the lib modules at this
+//! crate root keeps daemon-internal `crate::action::*` paths working.
 
+mod bridge;
 mod ipc;
 mod layout;
-mod state;
+mod settings;
 mod wayland_proto;
 mod wm;
 
-// Single source of truth: the action vocabulary, keysym table, and
-// value-typed helpers all live in the library. Re-export them so the
-// daemon's internal modules keep their existing `crate::*` paths.
-pub use gharial::{action, color, keysyms, orientation, output, value};
+pub use gharial::{action, keysyms};
 
 use std::process::ExitCode;
 
-use layout::Params;
-use state::Shared;
+use settings::Settings;
 
 fn main() -> ExitCode {
     if let Some(arg) = std::env::args().nth(1) {
@@ -42,9 +37,8 @@ fn main() -> ExitCode {
         }
     }
 
-    let shared = Shared::new(Params::default());
-    if let Err(e) = wm::run(shared) {
-        eprintln!("gharial: wm loop exited with error: {e}");
+    if let Err(e) = wm::run(Settings::default()) {
+        eprintln!("gharial: {e}");
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
@@ -52,7 +46,7 @@ fn main() -> ExitCode {
 
 fn print_help() {
     println!(
-        "gharial {version} - master-stack layout daemon for river
+        "gharial {version} - window manager for river
 
 Usage: gharial [OPTIONS]
 
@@ -60,9 +54,10 @@ Options:
   -h, --help       Show this help and exit
   -V, --version    Show version and exit
 
-Tuning at runtime:
+Configure and control it at runtime with gharialctl, e.g.:
   gharialctl set main-ratio 0.55
-  gharialctl set gaps 8
+  gharialctl rule add app-id=pavucontrol float size 800x600
+  gharialctl window list
 
 IPC socket: $GHARIAL_SOCKET, or $XDG_RUNTIME_DIR/gharial-$WAYLAND_DISPLAY.sock",
         version = env!("CARGO_PKG_VERSION"),

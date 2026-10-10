@@ -13,6 +13,7 @@ use crate::wayland_proto::layer_shell::{
 };
 use crate::wayland_proto::{RiverLayerShellOutputV1, RiverLayerShellSeatV1, RiverLayerShellV1};
 
+use super::super::seats::LayerFocus;
 use super::super::world::World;
 
 impl Dispatch<RiverLayerShellOutputV1, ()> for World {
@@ -25,13 +26,11 @@ impl Dispatch<RiverLayerShellOutputV1, ()> for World {
         _qh: &QueueHandle<Self>,
     ) {
         let proxy_id = proxy.id();
-        let output_id = state.outputs.iter_ids().find(|id| {
-            state
-                .outputs
-                .get(id)
-                .and_then(|o| o.layer_shell.as_ref().map(Proxy::id))
-                == Some(proxy_id.clone())
-        });
+        let output_id = state
+            .outputs
+            .iter()
+            .find(|o| o.layer_shell.as_ref().map(Proxy::id) == Some(proxy_id.clone()))
+            .map(|o| o.id());
         let Some(output_id) = output_id else { return };
         let Some(entry) = state.outputs.get_mut(&output_id) else {
             return;
@@ -50,6 +49,8 @@ impl Dispatch<RiverLayerShellOutputV1, ()> for World {
                 let w = width.max(0) as u32;
                 let h = height.max(0) as u32;
                 let area = crate::layout::Rect { x, y, w, h };
+                // A new usable area can change floating windows' bounds
+                // and centring as well as the tiling.
                 let changed = entry.non_exclusive_area != Some(area);
                 entry.non_exclusive_area = Some(area);
                 if changed {
@@ -83,11 +84,16 @@ impl Dispatch<RiverLayerShellSeatV1, ()> for World {
             return;
         };
         match event {
-            seat_iface::Event::FocusExclusive | seat_iface::Event::FocusNonExclusive => {
-                seat.layer_focus_active = true;
-            }
+            seat_iface::Event::FocusExclusive => seat.layer_focus = LayerFocus::Exclusive,
+            seat_iface::Event::FocusNonExclusive => seat.layer_focus = LayerFocus::NonExclusive,
             seat_iface::Event::FocusNone => {
-                seat.layer_focus_active = false;
+                seat.layer_focus = LayerFocus::None;
+                // Hand keyboard focus back to the window that had it —
+                // with the lowest priority, so a window opened from the
+                // launcher (queued after it) wins.
+                if let Some(window) = seat.focused.clone() {
+                    state.pending_focus.insert(0, window);
+                }
             }
         }
     }

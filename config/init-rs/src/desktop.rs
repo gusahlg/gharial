@@ -3,11 +3,15 @@
 //! The policy is built with gharial-ipc's typed configuration API. Invalid
 //! ratios, tags, and literal chords therefore fail during compilation rather
 //! than becoming broken startup commands.
+//!
+//! [`configure`] holds what gharial keeps in memory (layout, rules,
+//! bindings) and runs again after a daemon restart; [`autostart`] runs
+//! once per session.
 
 use std::env;
 
 use gharial_ipc::config::{Bindings, Config, Layout};
-use gharial_ipc::{chord, ratio, Action, Client, Color, Direction};
+use gharial_ipc::{chord, ratio, Action, Client, Color, Direction, Matcher, Placement, Rule};
 
 const MOD: &str = "Super";
 
@@ -18,12 +22,51 @@ pub fn configure(client: &Client) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Programs that live for the whole session — started once, so a daemon
+/// restart doesn't duplicate them.
+pub fn autostart(client: &Client) {
+    let wallpaper = env::var("HOME")
+        .map(|home| format!("{home}/Pictures/doctor_nath.png"))
+        .unwrap_or_default();
+    let programs: [Vec<&str>; 4] = [
+        vec!["waybar"],
+        vec!["wl-paste", "--type", "text", "--watch", "cliphist", "store"],
+        vec![
+            "wl-paste", "--type", "image", "--watch", "cliphist", "store",
+        ],
+        vec!["swaybg", "-i", wallpaper.as_str(), "-m", "fill"],
+    ];
+    for argv in programs {
+        if let Err(error) = client.spawn(argv[0], &argv[1..]) {
+            eprintln!("gharial-init-rs: autostart {}: {error}", argv[0]);
+        }
+    }
+}
+
+/// Where windows go when they open. Dialogs and fixed-size windows
+/// float on their own; these cover the rest.
+fn rules() -> Vec<Rule> {
+    vec![
+        Rule::new(
+            Matcher::app_id("pavucontrol"),
+            Placement::new().floating(true).size(900, 600).centered(),
+        ),
+        Rule::new(
+            Matcher::title("Picture-in-Picture"),
+            Placement::new()
+                .floating(true)
+                .sticky(true)
+                .size(640, 360)
+                .position(-20, -20),
+        ),
+    ]
+}
+
 fn build_config(home: &str) -> Config {
     let notes = format!("{home}/Notes");
     let night_light = format!("{home}/.local/share/night-light");
     let rec = format!("{home}/.local/share/rec");
     let rec_stop = format!("{home}/.local/share/rec-stop");
-    let wallpaper = format!("{home}/Pictures/doctor_nath.png");
 
     let mut tofi_args = vec![
         "--drun-launch=true".to_string(),
@@ -48,6 +91,7 @@ fn build_config(home: &str) -> Config {
         .bind(chord!("Super+C"), Action::Close)
         .bind(chord!("Super+V"), Action::ToggleFloat)
         .bind(chord!("Super+F"), Action::ToggleFullscreen)
+        .bind(chord!("Super+S"), Action::ToggleSticky)
         .bind(chord!("Super+R"), Action::spawn("tofi-drun", tofi_args))
         .bind(
             chord!("Super+N"),
@@ -207,12 +251,7 @@ fn build_config(home: &str) -> Config {
         // Configure output modes, positions, and pointer adjacency with
         // the compositor's output manager (for example kanshi).
         .bindings(bindings)
-        .spawn(["waybar"])
-        .spawn(["wl-paste", "--type", "text", "--watch", "cliphist", "store"])
-        .spawn([
-            "wl-paste", "--type", "image", "--watch", "cliphist", "store",
-        ])
-        .spawn(["swaybg", "-i", wallpaper.as_str(), "-m", "fill"])
+        .rules(rules())
 }
 
 fn command_available(command: &str) -> bool {

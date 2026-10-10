@@ -1,9 +1,6 @@
-//! Tag bitmask helpers. Tags 1..32 map to bits 0..31.
-//!
-//! Since v0.3 every output owns its own active mask (see
-//! [`super::outputs::OutputEntry::active_tags`]) — each screen is an
-//! independent view into the tag space. The helpers here recompute
-//! window visibility from those per-output masks.
+//! Tag bitmask helpers and the visibility pass. Tags 1..32 map to bits
+//! 0..31; every output owns its own active mask (see
+//! [`super::outputs::OutputEntry::active_tags`]).
 
 use std::collections::HashMap;
 
@@ -12,40 +9,87 @@ use wayland_client::backend::ObjectId;
 use super::world::World;
 
 /// `1 << (n - 1)` with `n` already validated to 1..=32 by the caller.
-/// The debug-assert catches drift in the upstream parsers that promise
-/// the 1..=32 range; release builds trust the contract.
 pub fn tag_mask(n: u8) -> u32 {
     debug_assert!((1..=32).contains(&n), "tag_mask: n must be 1..=32, got {n}");
     1u32 << (n - 1)
 }
 
-/// Recompute every window's `visible` flag from its tag mask vs its
-/// output's active mask. Windows whose output has disappeared (or was
-/// never set) are re-homed to the focused output first. Called after
-/// any tag- or output-mutation action and at the top of every manage
-/// sequence.
+/// The lowest tag in `mask`, as a single-tag mask (`0` stays `0`).
+pub fn lowest_tag(mask: u32) -> u32 {
+    if mask == 0 {
+        0
+    } else {
+        1 << mask.trailing_zeros()
+    }
+}
+
+/// Recompute every placed window's `visible` flag from its tags (or
+/// stickiness) against its output's active mask. Run at the top of every
+/// manage sequence and after any tag/output change.
+///
+/// Also heals homeless windows: a window whose output vanished moves to
+/// the focused output *and onto its visible tags* (so it never silently
+/// disappears), remembering where it came from; when an output with that
+/// connector name returns, the window goes back with its old tags.
 pub fn set_visibility_targets(world: &mut World) {
     let masks: HashMap<ObjectId, u32> = world
         .outputs
         .iter()
         .map(|o| (o.id(), o.active_tags))
         .collect();
+    let names: HashMap<String, ObjectId> = world
+        .outputs
+        .iter()
+        .filter_map(|o| Some((o.name.clone()?, o.id())))
+        .collect();
     let fallback = world.outputs.focused_id();
-    let (_, by_id) = world.windows.split_mut();
-    for entry in by_id.values_mut() {
+    let fallback_mask = fallback.as_ref().and_then(|id| masks.get(id)).copied();
+
+    let mut changed = false;
+    for entry in world.windows.iter_mut() {
+        if !entry.placed {
+            continue;
+        }
+        // Back home?
+        if let Some(home) = entry
+            .evacuated
+            .as_ref()
+            .and_then(|e| names.get(&e.output_name))
+        {
+            let evac = entry.evacuated.take().expect("checked above");
+            entry.output = Some(home.clone());
+            entry.tags = evac.tags;
+            entry.reset_geometry();
+            changed = true;
+        }
         let valid = entry
             .output
             .as_ref()
             .is_some_and(|id| masks.contains_key(id));
-        if !valid {
+        if !valid && fallback.is_some() {
             entry.output = fallback.clone();
+            if let Some(mask) = fallback_mask {
+                if entry.tags & mask == 0 {
+                    entry.tags = lowest_tag(mask);
+                }
+            }
+            entry.reset_geometry();
+            changed = true;
         }
-        entry.visible = match entry.output.as_ref().and_then(|id| masks.get(id)) {
-            Some(active) => (entry.tags & active) != 0,
+        let visible = match entry.output.as_ref().and_then(|id| masks.get(id)) {
+            Some(active) => entry.sticky || (entry.tags & active) != 0,
             // No outputs at all — keep windows nominally visible so the
             // first output to appear shows them immediately.
             None => true,
         };
+        if visible != entry.visible {
+            entry.visible = visible;
+            changed = true;
+        }
+    }
+    if changed {
+        world.mark_layout_dirty();
+        world.stacking_dirty = true;
     }
 }
 
@@ -63,8 +107,6 @@ mod tests {
 
     #[test]
     fn tag_mask_covers_every_valid_tag() {
-        // 32 unique tags, every bit set exactly once across the range —
-        // the union of all masks must be u32::MAX.
         let mut union = 0u32;
         for n in 1..=32u8 {
             let m = tag_mask(n);
@@ -73,6 +115,13 @@ mod tests {
             union |= m;
         }
         assert_eq!(union, u32::MAX);
+    }
+
+    #[test]
+    fn lowest_tag_picks_the_smallest_bit() {
+        assert_eq!(lowest_tag(0b1010), 0b0010);
+        assert_eq!(lowest_tag(0x8000_0000), 0x8000_0000);
+        assert_eq!(lowest_tag(0), 0);
     }
 
     #[test]

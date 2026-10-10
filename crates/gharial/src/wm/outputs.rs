@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 
+use gharial_ipc::Presentation;
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::Proxy;
@@ -41,13 +42,12 @@ pub struct OutputEntry {
     pub focus: FocusMemory<ObjectId>,
     /// Layer-shell handle for this output, created via
     /// `river_layer_shell_v1.get_output`. Holding it tells river we
-    /// want layer surfaces on this output. `None` until the manager
-    /// dispatch creates it.
+    /// want layer surfaces on this output.
     pub layer_shell: Option<RiverLayerShellOutputV1>,
-    /// `true` once we've made this output the layer-shell default
-    /// (`set_default` request). One-shot per session; only one output
-    /// may be the default at a time.
-    pub layer_shell_default_sent: bool,
+    /// Desired presentation mode, and the raw mode last sent (render
+    /// state, reconciled in `flush_render`).
+    pub presentation: Presentation,
+    pub presentation_sent: Option<u32>,
     /// Area of this output left after subtracting layer-surface
     /// exclusive zones (waybar / panels / docks). Reported by
     /// `river_layer_shell_output_v1.non_exclusive_area` in *global*
@@ -67,7 +67,8 @@ impl OutputEntry {
             active_tags: 1,
             focus: FocusMemory::default(),
             layer_shell: None,
-            layer_shell_default_sent: false,
+            presentation: Presentation::Vsync,
+            presentation_sent: None,
             non_exclusive_area: None,
         }
     }
@@ -94,11 +95,45 @@ impl OutputEntry {
     /// the layer-shell has reported one, otherwise the full output
     /// rectangle. Coordinates are *global* (matching the layout origin).
     pub fn tiling_area(&self) -> Rect {
-        match self.non_exclusive_area {
-            Some(area) if area.w > 0 && area.h > 0 => area,
-            _ => self.rect(),
-        }
+        usable_area(self.rect(), self.non_exclusive_area)
     }
+
+    /// Name for listings and rules: the connector, or `fallback`.
+    pub fn display_name(&self, fallback: usize) -> String {
+        self.name.clone().unwrap_or_else(|| fallback.to_string())
+    }
+
+    pub fn contains(&self, (x, y): (i32, i32)) -> bool {
+        let r = self.rect();
+        x >= r.x && x < r.x + r.w as i32 && y >= r.y && y < r.y + r.h as i32
+    }
+}
+
+/// The usable area: the layer-shell's non-exclusive area when it is a
+/// sane sub-rectangle of the output, else the whole output. River may
+/// report a zero-sized or stale area transiently (mode changes); the
+/// layout must never be handed an empty or off-screen box.
+pub fn usable_area(output: Rect, non_exclusive: Option<Rect>) -> Rect {
+    match non_exclusive {
+        Some(area) if area.w > 0 && area.h > 0 && intersects(area, output) => area,
+        _ => output,
+    }
+}
+
+fn intersects(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.w as i32
+        && b.x < a.x + a.w as i32
+        && a.y < b.y + b.h as i32
+        && b.y < a.y + a.h as i32
+}
+
+/// Per-connector state kept across an output's removal, so a monitor
+/// that reconnects (or a reconfiguration that recreates outputs) comes
+/// back showing what it showed before.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Remembered {
+    pub active_tags: u32,
+    pub presentation: Presentation,
 }
 
 #[derive(Default)]
@@ -109,6 +144,10 @@ pub struct Outputs {
     /// focus restoration. `None` only while no outputs exist; healed by
     /// `ensure_focused` at the top of every manage sequence.
     focused: Option<ObjectId>,
+    /// The output we last made the layer-shell default.
+    pub layer_default: Option<ObjectId>,
+    /// State of removed outputs, by connector name.
+    pub remembered: HashMap<String, Remembered>,
 }
 
 impl Outputs {
@@ -118,12 +157,6 @@ impl Outputs {
 
     pub fn get_mut(&mut self, id: &ObjectId) -> Option<&mut OutputEntry> {
         self.by_id.get_mut(id)
-    }
-
-    /// First output the compositor advertised. Fallback home for
-    /// windows and layer-shell defaults when nothing better is known.
-    pub fn first(&self) -> Option<&OutputEntry> {
-        self.order.first().and_then(|id| self.by_id.get(id))
     }
 
     /// The currently focused output's id, if any.
@@ -160,15 +193,14 @@ impl Outputs {
         }
     }
 
-    /// Advertisement-order neighbour of the focused output. `forward`
-    /// is `next`; wraps around.
-    pub fn cycle_from_focused(&self, forward: bool) -> Option<ObjectId> {
+    /// Advertisement-order neighbour of `from` (default: the focused
+    /// output). `forward` is `next`; wraps around.
+    pub fn cycle_from(&self, from: Option<&ObjectId>, forward: bool) -> Option<ObjectId> {
         if self.order.is_empty() {
             return None;
         }
-        let current = self
-            .focused
-            .as_ref()
+        let current = from
+            .or(self.focused.as_ref())
             .and_then(|id| self.order.iter().position(|o| o == id))
             .unwrap_or(0);
         let len = self.order.len();
@@ -207,8 +239,19 @@ impl Outputs {
         self.order.iter().filter_map(|id| self.by_id.get(id))
     }
 
-    pub fn iter_ids(&self) -> impl Iterator<Item = ObjectId> + '_ {
-        self.order.iter().cloned()
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut OutputEntry> {
+        self.by_id.values_mut()
+    }
+
+    /// 1-based advertisement index — the name fallback for listings.
+    pub fn index_of(&self, id: &ObjectId) -> Option<usize> {
+        self.order.iter().position(|o| o == id).map(|i| i + 1)
+    }
+
+    /// Listing name: connector, or 1-based index.
+    pub fn name_of(&self, id: &ObjectId) -> Option<String> {
+        let entry = self.by_id.get(id)?;
+        Some(entry.display_name(self.index_of(id).unwrap_or(0)))
     }
 
     pub fn insert(&mut self, entry: OutputEntry) {
@@ -225,94 +268,50 @@ impl Outputs {
         if self.focused.as_ref() == Some(id) {
             self.focused = self.order.first().cloned();
         }
-        self.by_id.remove(id)
+        if self.layer_default.as_ref() == Some(id) {
+            self.layer_default = None;
+        }
+        let entry = self.by_id.remove(id)?;
+        if let Some(name) = &entry.name {
+            self.remembered.insert(
+                name.clone(),
+                Remembered {
+                    active_tags: entry.active_tags,
+                    presentation: entry.presentation,
+                },
+            );
+        }
+        Some(entry)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! `OutputEntry` carries the wayland proxy, which is impractical to
-    //! construct in a unit test. The fields we care about for layout
-    //! (position, dimensions, non_exclusive_area, tiling_area) live on
-    //! plain data, so we verify them via a stand-in helper that mirrors
-    //! the production geometry math.
     use super::*;
 
-    fn compute_tiling_area(
-        position: (i32, i32),
-        dimensions: (i32, i32),
-        non_exclusive_area: Option<Rect>,
-    ) -> Rect {
-        match non_exclusive_area {
-            Some(area) if area.w > 0 && area.h > 0 => area,
-            _ => Rect {
-                x: position.0,
-                y: position.1,
-                w: dimensions.0.max(0) as u32,
-                h: dimensions.1.max(0) as u32,
-            },
-        }
+    fn r(x: i32, y: i32, w: u32, h: u32) -> Rect {
+        Rect { x, y, w, h }
     }
 
     #[test]
-    fn tiling_area_falls_back_to_output_rect_until_layer_event_arrives() {
-        let area = compute_tiling_area((10, 20), (1920, 1080), None);
+    fn usable_area_falls_back_to_output_rect_until_layer_event_arrives() {
         assert_eq!(
-            area,
-            Rect {
-                x: 10,
-                y: 20,
-                w: 1920,
-                h: 1080
-            }
+            usable_area(r(10, 20, 1920, 1080), None),
+            r(10, 20, 1920, 1080)
         );
     }
 
     #[test]
-    fn tiling_area_uses_non_exclusive_when_present() {
-        let nea = Rect {
-            x: 0,
-            y: 30,
-            w: 1920,
-            h: 1050,
-        };
-        let area = compute_tiling_area((0, 0), (1920, 1080), Some(nea));
-        assert_eq!(area, nea);
+    fn usable_area_uses_non_exclusive_when_present() {
+        let nea = r(0, 30, 1920, 1050);
+        assert_eq!(usable_area(r(0, 0, 1920, 1080), Some(nea)), nea);
     }
 
     #[test]
-    fn tiling_area_falls_back_when_non_exclusive_is_zero_sized() {
-        // River may report a zero-w/h area transiently; we should not
-        // hand the layout an empty box, just fall back to the output.
-        let nea = Rect {
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
-        };
-        let area = compute_tiling_area((0, 0), (800, 600), Some(nea));
-        assert_eq!(
-            area,
-            Rect {
-                x: 0,
-                y: 0,
-                w: 800,
-                h: 600
-            }
-        );
-    }
-
-    #[test]
-    fn tiling_area_clamps_negative_output_dimensions() {
-        let area = compute_tiling_area((0, 0), (-1, -1), None);
-        assert_eq!(
-            area,
-            Rect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0
-            }
-        );
+    fn usable_area_ignores_degenerate_or_stale_areas() {
+        let out = r(0, 0, 800, 600);
+        assert_eq!(usable_area(out, Some(r(0, 0, 0, 0))), out);
+        // An area from before the output moved: entirely elsewhere.
+        assert_eq!(usable_area(out, Some(r(5000, 0, 800, 570))), out);
     }
 }

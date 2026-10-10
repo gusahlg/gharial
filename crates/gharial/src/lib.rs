@@ -36,6 +36,15 @@
 //!     g.bind_in_mode("resize", "Escape", Action::ExitMode)?;
 //!     g.bind_in_mode("resize", "L", Action::adjust_main_ratio(0.05))?;
 //!
+//!     // Rules: where windows go when they appear
+//!     g.add_rule(
+//!         gharial::Rule::new(
+//!             gharial::Matcher::app_id("pavucontrol"),
+//!             gharial::Placement::new().floating(true).size(800, 600),
+//!         ),
+//!         None,
+//!     )?;
+//!
 //!     // Autostart
 //!     g.spawn("waybar", &[] as &[&str])?;
 //!     Ok(())
@@ -86,11 +95,15 @@
 // Re-export the modules here so daemon-internal call sites keep their
 // `crate::action::*` / `crate::keysyms::*` paths and external users of
 // the `gharial` crate see the same surface they always did.
-pub use gharial_ipc::{action, client, color, config, keysyms, orientation, output, value};
+pub use gharial_ipc::{
+    action, client, color, command, config, info, keysyms, matcher, orientation, output, placement,
+    rule, tags, value, window,
+};
 
 pub use gharial_ipc::{
-    Action, BindingSpec, BoolValue, Client, Color, Direction, Error, Orientation, OutputTarget,
-    Result,
+    Action, BindingSpec, BoolValue, Client, Color, Command, Direction, Error, FloatPos, Geometry,
+    ListFormat, Matcher, Orientation, OutputInfo, OutputTarget, Placement, Presentation, Result,
+    Rule, TagSet, WindowInfo, WindowOp, WindowSelector,
 };
 
 // The compile-time config macros are `#[macro_export]`ed at the

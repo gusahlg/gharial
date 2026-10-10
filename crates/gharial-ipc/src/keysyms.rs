@@ -142,6 +142,17 @@ const fn parse_hex(b: &[u8], start: usize, end: usize) -> Option<u32> {
     Some(acc)
 }
 
+/// One canonical name per modifier bit, in chord order — the inverse
+/// of the alias table below.
+pub const MODIFIER_NAMES: [(&str, u32); 6] = [
+    ("Super", 64),
+    ("Ctrl", 4),
+    ("Alt", 8),
+    ("Shift", 1),
+    ("Mod3", 32),
+    ("Mod5", 128),
+];
+
 /// Modifier names → `river_seat_v1::modifiers` bits. Matched case-
 /// insensitively; aliases share a bit.
 const MODIFIERS: &[(&str, u32)] = &[

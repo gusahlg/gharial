@@ -1,24 +1,23 @@
 //! Dispatch table for `river_window_manager_v1` — the top-level driver
 //! of the manage/render loop.
 //!
-//! On `manage_start` we heal focused-output state, drain pending policy
-//! changes, refresh cached layout targets when dirty, flush window-management
-//! requests, then immediately `manage_finish`. On `render_start` we reuse
-//! those cached targets unless an intervening event invalidated them.
+//! `manage_start`: place new windows, run queued commands, settle focus,
+//! flush window-management state, `manage_finish`, then answer the IPC
+//! callers whose commands just took effect. `render_start`: position,
+//! show/hide, border, and stack, `render_finish`, then resolve waits.
 
-use wayland_client::{event_created_child, Connection, Dispatch, Proxy, QueueHandle};
+use wayland_client::{event_created_child, Connection, Dispatch, QueueHandle};
 
-use crate::state::{OutputInfo, OutputsInfo};
 use crate::wayland_proto::window_management::river_window_manager_v1 as iface;
 use crate::wayland_proto::{RiverOutputV1, RiverSeatV1, RiverWindowManagerV1, RiverWindowV1};
 
-use super::super::actions::{self, ensure_focus_invariant, set_focus};
+use super::super::actions::focus::{ensure_focus_invariant, set_focus};
 use super::super::outputs::OutputEntry;
-use super::super::render;
 use super::super::seats::SeatEntry;
 use super::super::tags::set_visibility_targets;
 use super::super::windows::entry_for;
 use super::super::world::World;
+use super::super::{bindings, commands, placement, render, waits};
 
 impl Dispatch<RiverWindowManagerV1, ()> for World {
     fn event(
@@ -32,8 +31,8 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
         match event {
             iface::Event::Unavailable => {
                 eprintln!(
-                    "gharial: river refused to advertise window-management (already \
-                     in use). Stop the other WM and try again."
+                    "gharial: river refused window management (another WM is \
+                     running?). Stop it and try again."
                 );
                 state.shutdown();
             }
@@ -44,51 +43,36 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
             iface::Event::ManageStart => {
                 state.sequence.enter_manage();
                 state.outputs.ensure_focused();
+                placement::place_new_windows(state);
                 set_visibility_targets(state);
-                // Make sure one output is the layer-shell default so
-                // launchers without a target output have a home.
-                ensure_layer_shell_default(state);
-                while let Some(action) = state.pending_actions.pop_front() {
-                    actions::execute(action, state);
-                }
+                commands::drain(state);
+                bindings::sync(state);
                 drain_pending_focus(state);
                 ensure_focus_invariant(state);
+                ensure_layer_shell_default(state);
                 render::ensure_targets(state);
-                // One lock acquisition for both layout+border snapshots so
-                // an IPC-thread change can't tear values mid-flush.
-                let (_, borders) = state.shared.render_snapshot();
-                render::flush_manage(state, &borders);
-                sync_outputs_mirror(state);
+                render::manage::flush(state);
                 proxy.manage_finish();
                 state.sequence.exit_manage();
+                commands::flush_replies(state);
+                waits::check(state);
             }
             iface::Event::RenderStart => {
                 state.sequence.enter_render();
                 render::ensure_targets(state);
-                let borders = state.shared.borders();
-                render::flush_render(state, &borders);
+                render::draw::flush(state);
                 proxy.render_finish();
                 state.sequence.exit_render();
+                waits::check(state);
             }
             iface::Event::Window { id } => {
-                // New windows land on the focused output, on its
-                // currently-active tags, so they appear in front of the
-                // user immediately.
-                let (tags, output) = match state.outputs.focused() {
-                    Some(o) => (o.active_tags, Some(o.id())),
-                    None => (1, None),
-                };
-                let entry = entry_for(id, &state.qh, tags, output);
-                let window_id = entry.proxy.id();
-                state.windows.insert(entry);
-                state.push_pending_focus(window_id);
+                state.windows.insert(entry_for(id, &state.qh));
                 state.mark_layout_dirty();
             }
             iface::Event::Output { id } => {
                 let mut entry = OutputEntry::new(id);
                 // Pair every river_output_v1 with a layer-shell handle
-                // so panels/launchers on that output are accepted by
-                // river. `set_default` follows in manage_start.
+                // so panels/launchers on that output are accepted.
                 entry.layer_shell = Some(state.globals.layer_shell.get_output(
                     &entry.proxy,
                     &state.qh,
@@ -105,19 +89,16 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
                     (),
                 ));
                 state.seats.insert(entry);
+                // Bindings are materialised per seat.
+                state.bindings.dirty = true;
             }
-            iface::Event::SessionLocked | iface::Event::SessionUnlocked => {
-                // Session lock policy is a future concern.
-            }
+            iface::Event::SessionLocked | iface::Event::SessionUnlocked => {}
         }
     }
 
-    // Three of the manager's events (`window`, `output`, `seat`) carry a
-    // `new_id` payload. wayland-client requires us to tell it which
-    // user_data to attach to each freshly-created child proxy; the
-    // default `event_created_child` panics. We attach `()` to all three
-    // because their per-instance state lives in `Windows` / `Outputs` /
-    // `Seats` keyed by ObjectId, not in the wayland user-data slot.
+    // The manager's `window`/`output`/`seat` events carry new objects;
+    // their per-instance state lives in `Windows`/`Outputs`/`Seats`
+    // keyed by ObjectId, so the user-data slot is just `()`.
     event_created_child!(World, RiverWindowManagerV1, [
         iface::EVT_WINDOW_OPCODE => (RiverWindowV1, ()),
         iface::EVT_OUTPUT_OPCODE => (RiverOutputV1, ()),
@@ -125,45 +106,39 @@ impl Dispatch<RiverWindowManagerV1, ()> for World {
     ]);
 }
 
-/// Pick the first output we know about and mark it as the layer-shell
-/// default if we haven't already. `set_default` is manage-bucket, so
-/// this only runs from inside `manage_start`.
+/// Keep the layer-shell default on the focused output, so a launcher
+/// that doesn't pick an output opens on the screen being used.
+/// `set_default` is manage-bucket.
 fn ensure_layer_shell_default(state: &mut World) {
-    let mut chosen: Option<wayland_client::backend::ObjectId> = None;
-    for output in state.outputs.iter() {
-        if output.layer_shell_default_sent {
-            return; // someone already owns the default — nothing to do
-        }
-        if chosen.is_none() && output.layer_shell.is_some() {
-            chosen = Some(output.id());
-        }
+    let Some(focused) = state.outputs.focused_id() else {
+        return;
+    };
+    if state.outputs.layer_default.as_ref() == Some(&focused) {
+        return;
     }
-    let Some(id) = chosen else { return };
-    if let Some(entry) = state.outputs.get_mut(&id) {
-        if let Some(ls) = entry.layer_shell.as_ref() {
-            ls.set_default();
-            entry.layer_shell_default_sent = true;
-        }
+    if let Some(ls) = state
+        .outputs
+        .get(&focused)
+        .and_then(|o| o.layer_shell.as_ref())
+    {
+        ls.set_default();
+        state.outputs.layer_default = Some(focused);
     }
 }
 
-/// Promote the most-recently-announced window to keyboard focus on the
-/// primary seat. Discards earlier pending IDs in the same drain so a
-/// burst of opens lands on the visually topmost window.
-///
-/// While a layer surface holds keyboard focus (launcher/panel), defer
-/// the drain — issuing focus_window would cancel that layer focus and
-/// drop the user's keystrokes mid-launch. Pending IDs survive until the
-/// next manage_start that sees the layer surface release focus.
+/// Give keyboard focus to the most recent pending window that is still
+/// visible (newly mapped, or clicked). While a layer surface holds
+/// focus the queue is kept for later — focusing a window now would
+/// cancel the launcher's focus mid-typing.
 fn drain_pending_focus(state: &mut World) {
     let Some(seat_id) = state.seats.primary().map(|s| s.id()) else {
         return;
     };
-    let layer_active = state
+    if state
         .seats
         .get(&seat_id)
-        .is_some_and(|s| s.layer_focus_active);
-    if layer_active {
+        .is_some_and(|s| s.layer_has_exclusive_focus())
+    {
         return;
     }
     let pending = std::mem::take(&mut state.pending_focus);
@@ -173,25 +148,4 @@ fn drain_pending_focus(state: &mut World) {
             return;
         }
     }
-}
-
-/// Mirror output state into `Shared` so the IPC thread can answer
-/// `output list` without crossing into the wayland thread.
-fn sync_outputs_mirror(state: &World) {
-    let focused = state.outputs.focused_id();
-    let outputs = state
-        .outputs
-        .iter()
-        .enumerate()
-        .map(|(idx, o)| OutputInfo {
-            // Index fallback matches the resolve grammar: outputs
-            // without a connector name are addressable as "1", "2", …
-            name: o.name.clone().unwrap_or_else(|| (idx + 1).to_string()),
-            position: o.position,
-            dimensions: o.dimensions,
-            active_tags: o.active_tags,
-            focused: focused.as_ref() == Some(&o.id()),
-        })
-        .collect();
-    state.shared.set_outputs_info(OutputsInfo { outputs });
 }

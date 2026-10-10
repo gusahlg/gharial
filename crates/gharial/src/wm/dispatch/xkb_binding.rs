@@ -8,6 +8,7 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use crate::wayland_proto::xkb_bindings::river_xkb_binding_v1 as iface;
 use crate::wayland_proto::RiverXkbBindingV1;
 
+use super::super::commands::{Op, Queued};
 use super::super::world::World;
 
 impl Dispatch<RiverXkbBindingV1, ()> for World {
@@ -21,12 +22,14 @@ impl Dispatch<RiverXkbBindingV1, ()> for World {
     ) {
         match event {
             iface::Event::Pressed => {
-                let id = proxy.id();
-                if let Some(entry) = state.bindings.get_by_proxy(&id) {
-                    state.pending_actions.push_back(entry.action.clone());
+                if let Some(action) = state.bindings.action_for(&proxy.id()).cloned() {
+                    // No manage_dirty: the protocol guarantees a
+                    // manage_start follows every pressed event.
+                    state.queued.push_back(Queued {
+                        op: Op::Action(action),
+                        reply: None,
+                    });
                 }
-                // No manage_dirty: the xkb-bindings protocol guarantees a
-                // manage_start event follows every pressed event.
             }
             iface::Event::Released => {
                 // Actions fire on press; release is a no-op until a

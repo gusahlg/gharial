@@ -1,5 +1,7 @@
 //! Output-selection vocabulary shared by the daemon, CLI, and Rust configs.
 
+use std::fmt;
+
 use crate::action::Direction;
 
 /// Which output an `output focus` / `output send` action selects.
@@ -32,6 +34,53 @@ impl OutputTarget {
     }
 }
 
+impl fmt::Display for OutputTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_token())
+    }
+}
+
+/// How an output paces page flips.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum Presentation {
+    /// Tear-free, synchronised to vblank. River's default.
+    #[default]
+    Vsync,
+    /// Flip immediately; tearing allowed. For latency/throughput
+    /// benchmarks that must not be capped by the refresh rate.
+    Async,
+    /// `async` while the topmost fullscreen window on the output asks for
+    /// tearing (its presentation hint), `vsync` otherwise.
+    Auto,
+}
+
+impl Presentation {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "vsync" => Ok(Self::Vsync),
+            "async" | "tearing" => Ok(Self::Async),
+            "auto" => Ok(Self::Auto),
+            other => Err(format!(
+                "invalid presentation mode: {other} (expected vsync|async|auto)"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Vsync => "vsync",
+            Self::Async => "async",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+impl fmt::Display for Presentation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +108,14 @@ mod tests {
             let target = OutputTarget::parse(token);
             assert_eq!(OutputTarget::parse(&target.to_token()), target);
         }
+    }
+
+    #[test]
+    fn presentation_round_trips() {
+        for p in [Presentation::Vsync, Presentation::Async, Presentation::Auto] {
+            assert_eq!(Presentation::parse(p.as_str()), Ok(p));
+        }
+        assert_eq!(Presentation::parse("tearing"), Ok(Presentation::Async));
+        assert!(Presentation::parse("fast").is_err());
     }
 }
