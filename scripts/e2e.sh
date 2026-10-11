@@ -137,6 +137,23 @@ check "window command replies with the ids" "$S" "$("$G" window "$S" fullscreen 
 sleep 0.4
 check "window command re-places it" "1770 260 300 200" "$(geom "$S")"
 
+# ── client fullscreen requests vs. rules ────────────────────────────
+echo "client fullscreen requests"
+"$G" rule add app-id=fs-locked float size 400x300 lock oneshot >/dev/null
+client fs-locked --fullscreen >/dev/null
+L=$("$G" wait window app-id=fs-locked --timeout 5s)
+check "a locked rule beats a pre-map fullscreen request" "1	0	1" "$(field "$L" 8,9,11)"
+check "and keeps the rule's exact size" "400 300" "$(geom "$L" | cut -d' ' -f3-4)"
+"$G" rule add app-id=fs-off fullscreen off float size 300x200 oneshot >/dev/null
+client fs-off --fullscreen >/dev/null
+W=$("$G" wait window app-id=fs-off --timeout 5s)
+check "fullscreen off in a rule overrides it too" "0" "$(field "$W" 9)"
+client fs-free --fullscreen >/dev/null
+X=$("$G" wait window app-id=fs-free --timeout 5s)
+check "without a rule the request is honoured" "1" "$(field "$X" 9)"
+for w in "$L" "$W" "$X"; do "$G" window "$w" close >/dev/null; done
+sleep 0.3
+
 # ── sticky ────────────────────────────────────────────────────────────
 echo "sticky"
 "$G" window "$A" sticky >/dev/null

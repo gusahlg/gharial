@@ -45,14 +45,17 @@ impl Dispatch<RiverWindowV1, ()> for World {
                 let Some(entry) = state.windows.get_mut(&id) else {
                     return;
                 };
+                // A locked window's geometry is policy's alone: a game
+                // that asks for fullscreen (from its own settings, say)
+                // must not undo a rule's fixed size.
+                if entry.locked {
+                    return;
+                }
                 entry.fullscreen = true;
                 entry.reset_geometry();
                 // Moving to the hinted output adopts its visible tags, so
                 // the window can't land hidden on a tag nobody views there.
-                // A locked window stays where policy put it: a game asking
-                // for "fullscreen on whatever monitor" must not leave the
-                // output its rule chose.
-                let hint = output.map(|o| o.id()).filter(|_| !entry.locked);
+                let hint = output.map(|o| o.id());
                 if let Some(output) = hint {
                     if state.outputs.get(&output).is_some() {
                         placement::move_to_output(state, &id, &output, false);
@@ -106,6 +109,8 @@ impl Dispatch<RiverWindowV1, ()> for World {
             iface::Event::UnreliablePid { unreliable_pid } => {
                 entry.pid = u32::try_from(unreliable_pid).ok().filter(|p| *p > 0);
             }
+            // Likewise a locked fullscreen window stays fullscreen.
+            iface::Event::ExitFullscreenRequested if entry.locked => {}
             iface::Event::ExitFullscreenRequested => {
                 entry.fullscreen = false;
                 entry.reset_geometry();

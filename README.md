@@ -17,7 +17,7 @@ setup — gharial owns the policy layer entirely.
 
 ## Status
 
-**0.4.0** — scripted placement and reliability. Targets river 0.4+ (the
+**0.4.1** — scripted placement and reliability. Targets river 0.4+ (the
 non-monolithic architecture). Tested against upstream `riverwm/river`
 at commit `da8cf20` (the rev the vendored protocol XMLs are pinned to)
 and river 0.4.8. The older river-classic 0.3.x is **not** supported (it

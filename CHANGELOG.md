@@ -3,6 +3,17 @@
 All notable changes to gharial. Versions follow semantic versioning;
 0.x means the wire/IPC grammar may still evolve.
 
+## [0.4.1]
+
+### Changed
+
+- `lock` now also freezes fullscreen state against the client: a locked
+  window ignores the client's own fullscreen and exit-fullscreen
+  requests, including one made before it first mapped (a game created
+  fullscreen from its settings), unless the rule itself says
+  `fullscreen`. Before, such a request overrode a rule's fixed
+  `float size …` and the window opened fullscreen.
+
 ## [0.4.0] — scripted placement and reliability
 
 ### Added

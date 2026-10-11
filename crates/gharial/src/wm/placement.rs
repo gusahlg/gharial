@@ -107,6 +107,15 @@ fn place_initial(world: &mut World, id: &ObjectId) {
             Ok(focus) => focus_wanted = focus,
             Err(e) => eprintln!("gharial: rule placement: {e}"),
         }
+        // A rule that locks the window decides its fullscreen state too: a
+        // fullscreen request the client made before it mapped (a game
+        // created with fullscreen from its settings) doesn't override it.
+        if let Some(entry) = world.windows.get_mut(id) {
+            if entry.locked && placement.fullscreen.is_none() && entry.fullscreen {
+                entry.fullscreen = false;
+                entry.reset_geometry();
+            }
+        }
     }
 
     super::tags::set_visibility_targets(world);

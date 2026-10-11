@@ -18,7 +18,7 @@
 //! | `float [B]` / `tile`     | floating vs tiled                                  |
 //! | `fullscreen [B]`         | fullscreen on its output                           |
 //! | `sticky [B]`             | visible on every tag of its output                 |
-//! | `lock [B]`               | geometry frozen: never resized/moved by policy     |
+//! | `lock [B]`               | geometry frozen: no relayout, no client fullscreen |
 //! | `border [B]`/`noborder`  | draw the border                                    |
 //! | `focus [B]`/`nofocus`    | take keyboard focus (on map, or now)               |
 //! | `size WxH`               | floating size (implies `float`)                    |

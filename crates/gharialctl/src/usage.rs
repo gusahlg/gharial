@@ -58,7 +58,8 @@ PLACEMENT (key value | key=value | --key value | --key=value):
   float [on|off|toggle]      tile = float off
   fullscreen [on|off|toggle]
   sticky [on|off|toggle]     Visible on every tag of its output
-  lock [on|off|toggle]       Never resized or moved by the layout again
+  lock [on|off|toggle]       Never resized or moved by the layout again, and
+                             the client can't switch fullscreen on or off
   border [on|off|toggle]     noborder = border off
   focus [on|off] / nofocus   Take keyboard focus (rules: on open)
   size WxH                   Floating content size (implies float)

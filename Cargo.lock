@@ -88,7 +88,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "gharial"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitflags",
  "calloop",
@@ -110,11 +110,11 @@ dependencies = [
 
 [[package]]
 name = "gharial-ipc"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "gharialctl"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "gharial-ipc",
 ]
